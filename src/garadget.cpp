@@ -11,6 +11,11 @@
 #include "softap/webconfig.h"
 #include "utils/timezones.h"
 
+#if GARADGET_ORG_MODE
+PRODUCT_ID(garadget::constants::kProductId);
+PRODUCT_VERSION(garadget::constants::kFirmwareId);
+#endif
+
 #if GARADGET_ENABLE_TESTPORT
 #include "nodes/port-test.h"
 #endif

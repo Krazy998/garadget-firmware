@@ -4,11 +4,6 @@
 
 #include <array>
 
-#if GARADGET_ORG_MODE
-PRODUCT_ID(garadget::constants::kProductId);
-PRODUCT_VERSION(garadget::constants::kFirmwareId);
-#endif
-
 namespace garadget {
 
 class ParticleNode : public Node {
