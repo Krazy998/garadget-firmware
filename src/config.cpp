@@ -59,7 +59,7 @@ void Config::save() {
 }
 
 int8_t Config::parse(const String& incomingConfig) {
-  if (incomingConfig.isEmpty()) {
+  if (incomingConfig.length() == 0) {
     return -1;
   }
 
@@ -356,6 +356,10 @@ void Config::setName(const String& name) {
 }
 
 const char* Config::statusToString(DoorStatus status) {
+  if (status == DoorStatus::None) {
+    return "unknown";
+  }
+
   switch (status) {
     case DoorStatus::Closed:
       return "closed";
@@ -370,7 +374,6 @@ const char* Config::statusToString(DoorStatus status) {
     case DoorStatus::Init:
       return "initialized";
     case DoorStatus::Unknown:
-    case DoorStatus::None:
     default:
       return "unknown";
   }
