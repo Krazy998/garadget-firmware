@@ -6,7 +6,7 @@
 
 #include <cstddef>
 
-#include <jsmn.h>
+#include "lib/jsmn_compat.h"
 
 namespace garadget {
 
