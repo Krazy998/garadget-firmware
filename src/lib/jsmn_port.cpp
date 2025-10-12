@@ -31,7 +31,8 @@ static void jsmn_fill_token(jsmntok_t* token, jsmntype_t type, int start, int en
 static int jsmn_parse_primitive(jsmn_parser* parser, const char* js, std::size_t len,
                                 jsmntok_t* tokens, unsigned int num_tokens) {
   int start = parser->pos;
-  for (; parser->pos < static_cast<int>(len); parser->pos++) {
+  const unsigned int limit = static_cast<unsigned int>(len);
+  for (; parser->pos < limit; parser->pos++) {
     char c = js[parser->pos];
     switch (c) {
       case '\t':
@@ -69,7 +70,8 @@ static int jsmn_parse_string(jsmn_parser* parser, const char* js, std::size_t le
   int start = parser->pos;
   parser->pos++;
 
-  for (; parser->pos < static_cast<int>(len); parser->pos++) {
+  const unsigned int limit = static_cast<unsigned int>(len);
+  for (; parser->pos < limit; parser->pos++) {
     char c = js[parser->pos];
 
     if (c == '"') {
@@ -85,7 +87,7 @@ static int jsmn_parse_string(jsmn_parser* parser, const char* js, std::size_t le
       return 0;
     }
 
-    if (c == '\\' && parser->pos + 1 < static_cast<int>(len)) {
+    if (c == '\\' && parser->pos + 1 < limit) {
       parser->pos++;
       switch (js[parser->pos]) {
         case '"':
@@ -126,7 +128,8 @@ static int jsmn_parse_internal(jsmn_parser* parser, const char* js, std::size_t 
   int i;
   jsmntok_t* token;
 
-  for (; parser->pos < static_cast<int>(len); parser->pos++) {
+  const unsigned int limit = static_cast<unsigned int>(len);
+  for (; parser->pos < limit; parser->pos++) {
     char c = js[parser->pos];
     switch (c) {
       case '{':
@@ -242,12 +245,6 @@ __attribute__((weak)) int jsmn_parse(jsmn_parser* parser, const char* js, std::s
                                      jsmntok_t* tokens, unsigned int num_tokens,
                                      void* reserved) {
   (void)reserved;
-  return jsmn_parse_internal(parser, js, len, tokens, num_tokens);
-}
-
-// Compatibility for environments expecting the 5-parameter form.
-__attribute__((weak)) int jsmn_parse(jsmn_parser* parser, const char* js, std::size_t len,
-                                     jsmntok_t* tokens, unsigned int num_tokens) {
   return jsmn_parse_internal(parser, js, len, tokens, num_tokens);
 }
 

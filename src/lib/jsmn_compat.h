@@ -48,8 +48,6 @@ typedef struct {
 void jsmn_init(jsmn_parser* parser, void* reserved);
 int jsmn_parse(jsmn_parser* parser, const char* js, size_t len, jsmntok_t* tokens,
                unsigned int num_tokens, void* reserved);
-int jsmn_parse(jsmn_parser* parser, const char* js, size_t len, jsmntok_t* tokens,
-               unsigned int num_tokens);
 
 #endif  // GARADGET_HAS_PLATFORM_JSMN
 
