@@ -15,7 +15,7 @@ jsmntok_t* JsonCommand::tokenise(char* json) {
   }
 
   jsmn_parser parser;
-  jsmn_init(&parser);
+  jsmn_init(&parser, nullptr);
 
   unsigned count = 64;
   jsmntok_t* tokens = static_cast<jsmntok_t*>(
@@ -24,7 +24,8 @@ jsmntok_t* JsonCommand::tokenise(char* json) {
     return nullptr;
   }
 
-  int result = jsmn_parse(&parser, json, std::strlen(json), tokens, count);
+  int result =
+      jsmn_parse(&parser, json, std::strlen(json), tokens, count, nullptr);
   while (result == JSMN_ERROR_NOMEM) {
     count = count * 2 + 1;
     jsmntok_t* previous = tokens;
@@ -34,8 +35,8 @@ jsmntok_t* JsonCommand::tokenise(char* json) {
       std::free(previous);
       return nullptr;
     }
-    jsmn_init(&parser);
-    result = jsmn_parse(&parser, json, std::strlen(json), tokens, count);
+    jsmn_init(&parser, nullptr);
+    result = jsmn_parse(&parser, json, std::strlen(json), tokens, count, nullptr);
   }
 
   if (result < 0) {
