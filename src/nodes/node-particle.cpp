@@ -175,7 +175,7 @@ void ParticleNode::updateNetworkConfig() {
                 netMask[1], netMask[2], netMask[3], gateway[0], gateway[1],
                 gateway[2], gateway[3], macAddress[0], macAddress[1],
                 macAddress[2], macAddress[3], macAddress[4], macAddress[5],
-                WiFi.SSID().c_str());
+                WiFi.SSID());
 }
 
 }  // namespace garadget
