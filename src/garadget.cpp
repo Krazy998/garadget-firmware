@@ -19,7 +19,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 STARTUP({
-  if constexpr (garadget::build::kAntennaPreference != ANT_AUTO) {
+  if (garadget::build::kAntennaPreference != ANT_AUTO) {
     WiFi.selectAntenna(garadget::build::kAntennaPreference);
   }
   softap_set_application_page_handler(f_pageHandler, nullptr);
@@ -41,7 +41,7 @@ TestPort testPort;
 bool initialized = false;
 
 void initLogging() {
-  if constexpr (build::kEnableDebugLog) {
+  if (build::kEnableDebugLog) {
     static SerialLogHandler logHandler(
         LOG_LEVEL_WARN, {{"app", LOG_LEVEL_ALL}});
     (void)logHandler;

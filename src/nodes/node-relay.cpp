@@ -63,7 +63,7 @@ bool RelayNode::receive(const Message& message) {
           clicks = 1;
           break;
         case DoorStatus::Closed:
-          if constexpr (build::kUseVirtualDoor) {
+          if (build::kUseVirtualDoor) {
             nextStatus = DoorStatus::Opening;
           }
           clicks = 1;

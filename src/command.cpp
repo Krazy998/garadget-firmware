@@ -1,6 +1,7 @@
 #include "command.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -65,7 +66,10 @@ void JsonCommand::produceResponse(Writer& writer, int result) {
 
 int JsonCommand::process() { return 0; }
 
-void JsonCommand::writeChar(Writer& writer, char c) { writer.write(&c, 1); }
+void JsonCommand::writeChar(Writer& writer, char c) {
+  const std::uint8_t data = static_cast<std::uint8_t>(c);
+  writer.write(&data, 1);
+}
 
 void JsonCommand::writeQuotedString(Writer& writer, const char* value) {
   writeChar(writer, '"');

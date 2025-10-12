@@ -70,7 +70,7 @@ bool SensorNode::isTripping() { return read() > *threshold_; }
 std::uint16_t SensorNode::baseValue() const { return *base_; }
 
 DoorStatus SensorNode::getState() {
-  if constexpr (build::kUseVirtualDoor) {
+  if (build::kUseVirtualDoor) {
     return *status_ == DoorStatus::Closed ? DoorStatus::Closed : DoorStatus::Open;
   }
 
@@ -89,7 +89,7 @@ void SensorNode::onMotionEnd() {
       onChange(DoorStatus::Open);
       break;
     case DoorStatus::Closing:
-      if constexpr (build::kUseVirtualDoor) {
+      if (build::kUseVirtualDoor) {
         onChange(DoorStatus::Closed);
       } else if (getState() != DoorStatus::Closed) {
         onChange(DoorStatus::Stopped);
