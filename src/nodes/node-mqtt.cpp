@@ -174,7 +174,7 @@ void MqttNode::publishDiscovery() {
 const char* MqttNode::clientId() const {
   auto& config = Config::instance();
   String id = String(config.config.deviceName.data());
-  if (id.isEmpty()) {
+  if (id.length() == 0) {
     id = System.deviceID();
   }
   id.replace(' ', '_');
