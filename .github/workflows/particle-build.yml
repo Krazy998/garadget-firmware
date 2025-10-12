@@ -1,0 +1,77 @@
+name: Particle P1 Garadget Firmware Build
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build Garadget Firmware for P1
+    strategy:
+      matrix:
+        os_version: [ "2.3.1" ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git make build-essential python3 python3-pip \
+            libarchive-zip-perl wget xz-utils
+
+      - name: Install ARM GCC toolchain (10-2020-q4-major)
+        run: |
+          wget https://developer.arm.com/-/media/Files/downloads/gnu-rm/10-2020q4/gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2
+          tar -xjf gcc-arm-none-eabi-10-2020-q4-major-x86_64-linux.tar.bz2
+          sudo mv gcc-arm-none-eabi-10-2020-q4-major /opt/
+          echo "/opt/gcc-arm-none-eabi-10-2020-q4-major/bin" >> $GITHUB_PATH
+
+      - name: Clone Particle Device OS (${{ matrix.os_version }})
+        run: |
+          git clone --branch v${{ matrix.os_version }} --depth 1 https://github.com/particle-iot/device-os.git
+          cd device-os
+          git submodule update --init --recursive
+
+      - name: Build Garadget firmware for P1 (Device OS ${{ matrix.os_version }})
+        run: |
+          export PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin:$PATH
+          arm-none-eabi-gcc --version
+      
+          mkdir -p build
+          cd device-os
+      
+          # Ensure submodules are ready
+          git submodule update --init --recursive
+      
+          # Build Garadget firmware (P1)
+          make -C modules/photon/user-part clean all PLATFORM=p1 APPDIR=$GITHUB_WORKSPACE
+      
+          echo "=== Listing output directory ==="
+          ls -R ../target || true
+      
+          # Locate firmware binary in ../target
+          BIN_PATH=$(find ../target -name "garadget-firmware.bin" -print -quit)
+          if [ -z "$BIN_PATH" ]; then
+            BIN_PATH=$(find ../target -name "firmware.bin" -print -quit)
+          fi
+
+          if [ -z "$BIN_PATH" ]; then
+            echo "Firmware binary not found in ../target" >&2
+            exit 1
+          fi
+
+          echo "Firmware binary found at: $BIN_PATH"
+
+          cp "$BIN_PATH" "$GITHUB_WORKSPACE/build/garadget-p1-${{ matrix.os_version }}.bin"
+
+      - name: Upload compiled firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: garadget-p1-firmware-${{ matrix.os_version }}
+          path: build/garadget-p1-${{ matrix.os_version }}.bin
