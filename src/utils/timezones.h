@@ -10,7 +10,7 @@
 #ifndef TIMEZONES_H
 #define TIMEZONES_H
 
-#include "application.h"
+#include "Particle.h"
 #define SECS_PER_DAY 24 * 60 * 60;
 
 class c_timezones {

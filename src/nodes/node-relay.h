@@ -1,32 +1,24 @@
-// $Id$
-/**
- * @file node-relay.h
- * @brief Implements relay functions
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
-#ifndef RELAY_H
-#define RELAY_H
+#pragma once
 
 #include "node.h"
 
-class c_relay : public c_node {
+namespace garadget {
 
-  public:
-    bool f_init();
-    void f_process();
-    bool f_receive(const c_message& a_message);
+class RelayNode : public Node {
+ public:
+  bool init() override;
+  void process() override;
+  bool receive(const Message& message) override;
 
-  protected:
-    void f_on(uint8_t n_clicks = 0);
-    void f_off();
+ private:
+  void engage(std::uint8_t clicks = 0);
+  void release();
 
-    c_timeout o_onTimer;
-    c_timeout o_offTimer;
-    c_doorStatus* n_status;
-    uint8_t n_clicksLeft;
+  Timeout onTimer_;
+  Timeout offTimer_;
+  DoorStatus* status_ = nullptr;
+  std::uint8_t remainingClicks_ = 0;
 };
 
-#endif
+}  // namespace garadget
+

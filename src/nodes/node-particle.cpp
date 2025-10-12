@@ -1,240 +1,182 @@
-// $Id$
-/**
- * @file node-particle.cpp
- * @brief Implements Particle cloud interface
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "node-particle.h"
 
-bool c_particle::f_init() {
+#include <cstdio>
 
-  b_enabled = f_getConfig().a_config.n_protocols & 0b01;
-  if (!b_enabled) {
-    if (Particle.connected())
+namespace garadget {
+
+bool ParticleNode::init() {
+  auto& config = getConfig();
+  enabled_ = (config.config.protocols & 0b01) != 0;
+
+  if (!enabled_) {
+    if (Particle.connected()) {
       Particle.disconnect();
+    }
     Log.info("Cloud - disabled");
-    return FALSE;
+    return false;
   }
+
   Log.info("Cloud - enabled");
-  b_boot = TRUE;
-  b_init = TRUE;
-  return TRUE;
+  boot_ = true;
+  initialized_ = true;
+  return true;
 }
 
-/**
- * Waits for the server connection to stabilize
- * then initializes cloud features
- */
-void c_particle::f_declare() {
-
-  if (!b_init || !Particle.syncTimeDone())
+void ParticleNode::declare() {
+  if (!initialized_ || !Particle.syncTimeDone()) {
     return;
+  }
 
-  // initial time sync with server
   if (!Time.isValid()) {
     Particle.syncTime();
     return;
   }
 
-  o_updateTimer.f_setDuration(TIMER_VARS);
-  f_updateDoorConfig();
+  updateTimer_.setDuration(constants::kVariablePublishIntervalMs);
+  updateDoorConfig();
 
-  if (b_boot) {
-    Particle.function("setState", &c_particle::f_receiveState, this);
-    Particle.function("setConfig", &c_particle::f_receiveConfig, this);
-    Particle.variable("doorStatus", s_doorStatus, STRING);
-    Particle.variable("doorConfig", s_doorConfig, STRING);
-    Particle.variable("netConfig", s_netConfig, STRING);
-    Particle.subscribe("spark/", &c_particle::f_handleEvent, this, MY_DEVICES);
+  if (boot_) {
+    Particle.function("setState", &ParticleNode::receiveState, this);
+    Particle.function("setConfig", &ParticleNode::receiveConfig, this);
+    Particle.variable("doorStatus", doorStatus_.data(), STRING);
+    Particle.variable("doorConfig", doorConfig_.data(), STRING);
+    Particle.variable("netConfig", netConfig_.data(), STRING);
+    Particle.subscribe("spark/", &ParticleNode::handleEvent, this, MY_DEVICES);
     Particle.publish("spark/device/name", PRIVATE);
-    b_boot = FALSE;
+    boot_ = false;
     Log.info("Cloud - ready");
   }
-  b_init = FALSE;
+  initialized_ = false;
 }
 
-void c_particle::f_process() {
-  if (!b_enabled)
+void ParticleNode::process() {
+  if (!enabled_) {
     return;
+  }
 
   if (!Particle.connected()) {
     Particle.connect();
     return;
   }
-  f_declare();
+
+  declare();
   Particle.process();
 
-  if (!o_updateTimer.f_isRunning()) {
-    // update particle variables
-    f_updateDoorStatus();
-    f_updateNetConfig();
-    o_updateTimer.f_start();
+  if (!updateTimer_.isRunning()) {
+    updateDoorStatus();
+    updateNetworkConfig();
+    updateTimer_.start();
 
-    // periodically sync time
-    if (millis() - Particle.timeSyncedLast() > TIMER_SYNC) {
+    if (millis() - Particle.timeSyncedLast() > constants::kTimeSyncIntervalMs) {
       Log.info("Cloud - syncing time");
       Particle.syncTime();
     }
   }
 }
 
-bool c_particle::f_receive(const c_message& a_message) {
-  switch (a_message.n_type) {
-    case MSG_INIT:
-
-    // configuration update - reinit settings, update config variable
-    case MSG_CONFIG:
-      f_init();
+bool ParticleNode::receive(const Message& message) {
+  switch (message.type) {
+    case MessageType::Init:
+    case MessageType::Config:
+      init();
       break;
-
-    // state change - publish
-    case MSG_STATUS:
-      if (b_enabled)
-        f_publishStatus(*(c_doorStatus*)a_message.p_payload);
+    case MessageType::Status:
+      if (enabled_) {
+        publishStatus(*static_cast<const DoorStatus*>(message.payload));
+      }
       break;
-
-    case MSG_ALERT:
-      if (b_enabled)
-        f_publishAlert((char*)a_message.p_payload);
+    case MessageType::Alert:
+      if (enabled_) {
+        publishAlert(static_cast<const char*>(message.payload));
+      }
+      break;
+    default:
       break;
   }
-  return TRUE;
+  return true;
 }
 
-/**
- * Particle function "setConfig"
- */
-int c_particle::f_receiveConfig(String s_config) {
-  Log.info("Cloud - new config: %s", s_config.c_str());
-  return f_getConfig().f_parse(s_config);
+int ParticleNode::receiveConfig(String config) {
+  Log.info("Cloud - new config: %s", config.c_str());
+  return getConfig().parse(config);
 }
 
-/**
- * Particle function "setState"
- */
-int c_particle::f_receiveState(String s_state) {
-
-  c_doorStatus n_status = c_config::f_statusEnum(s_state);
-  if (n_status == STATUS_UNKNOWN) {
-    Log.error("Cloud - unknown command: %s", s_state.c_str());
-    return FALSE;
+int ParticleNode::receiveState(String state) {
+  const DoorStatus status = Config::statusFromString(state);
+  if (status == DoorStatus::Unknown) {
+    Log.error("Cloud - unknown command: %s", state.c_str());
+    return false;
   }
 
-  c_message a_message = {
-    "cloud",
-    MSG_COMMAND,
-    &n_status
-  };
-  Log.info("Cloud - command: %s", s_state.c_str());
-  return f_handle(a_message);
+  const Message message{"cloud", MessageType::Command, &status};
+  Log.info("Cloud - command: %s", state.c_str());
+  return handleMessage(message);
 }
 
-/**
- * Particle function event subscription
- */
-void c_particle::f_handleEvent(const char* s_topic, const char* s_data) {
-  Log.info("Cloud - topic: %s, Value: %s", s_topic, s_data);
-  if (String(s_topic).equals("spark/device/name")) {
-    f_getConfig().f_setName(String(s_data));
-    f_publishStatus(STATUS_INIT);
+void ParticleNode::handleEvent(const char* topic, const char* data) {
+  Log.info("Cloud - topic: %s, Value: %s", topic, data);
+  if (String(topic).equals("spark/device/name")) {
+    getConfig().setName(String(data));
+    publishStatus(DoorStatus::Init);
   }
 }
 
-/**
- * Publishes given state to the cloud
- */
-void c_particle::f_publishStatus(c_doorStatus n_status) {
-  String s_status = c_config::f_statusString(n_status);
-  Particle.publish("state", s_status, 60, PRIVATE);
-  Log.info("Cloud - published status: %s", s_status.c_str());
+void ParticleNode::publishStatus(DoorStatus status) {
+  const String payload = Config::statusToString(status);
+  Particle.publish("state", payload, 60, PRIVATE);
+  Log.info("Cloud - published status: %s", payload.c_str());
 }
 
-/**
- * Publishes given alert to the cloud
- */
-void c_particle::f_publishAlert(char* s_alertData) {
-  Particle.publish("alert", s_alertData, 60, PRIVATE);
-  Log.info("Cloud - published alert: %s", s_alertData);
+void ParticleNode::publishAlert(const char* alertData) {
+  Particle.publish("alert", alertData, 60, PRIVATE);
+  Log.info("Cloud - published alert: %s", alertData);
 }
 
-void c_particle::f_updateDoorStatus() {
-  char s_time[10];
-  c_config& o_config = f_getConfig();
-  o_config.f_timeInStatus(s_time);
+void ParticleNode::updateDoorStatus() {
+  char timeBuffer[10];
+  auto& config = getConfig();
+  config.timeInStatus(timeBuffer, sizeof(timeBuffer));
 
-  sprintf(
-    s_doorStatus,
-    "status=%s|time=%s|sensor=%u|base=%u|signal=%d",
-    c_config::f_statusString(o_config.a_state.n_doorStatus),
-    s_time,
-    o_config.a_state.n_sensorReflection,
-    o_config.a_state.n_sensorBase,
-    (int)WiFi.RSSI()
-  );
+  std::snprintf(doorStatus_.data(), doorStatus_.size(),
+                "status=%s|time=%s|sensor=%u|base=%u|signal=%d",
+                Config::statusToString(config.state.doorStatus), timeBuffer,
+                config.state.sensorReflection, config.state.sensorBase,
+                static_cast<int>(WiFi.RSSI()));
 }
 
-/**
-* Generates the string for door configuration variables
-*/
-void c_particle::f_updateDoorConfig() {
-  c_config::c_doorConfig& a_config = f_getConfig().a_config;
-  sprintf(
-    s_doorConfig,
-    "sys=%s|ver=%u.%u|rdt=%u|mtt=%u|rlt=%u|rlp=%u|srr=%u|srt=%u|aev=%u|aot=%u|ans=%u|ane=%u|tzo=%s|nme=%s",
-    System.version().c_str(),
-    a_config.n_versionMajor,
-    a_config.n_versionMinor,
-    a_config.n_readTime,
-    a_config.n_motionTime,
-    a_config.n_relayTime,
-    a_config.n_relayPause,
-    SENSOR_READS,
-    a_config.n_sensorThreshold,
-    a_config.n_alertEvents,
-    a_config.n_alertOpenTimeout,
-    a_config.n_alertNightStart,
-    a_config.n_alertNightEnd,
-    a_config.s_timeZone,
-    a_config.s_deviceName
-  );
+void ParticleNode::updateDoorConfig() {
+  const auto& config = getConfig().config;
+  std::snprintf(doorConfig_.data(), doorConfig_.size(),
+                "sys=%s|ver=%u.%u|rdt=%u|mtt=%u|rlt=%u|rlp=%u|srr=%u|srt=%u|aev=%u|aot=%u|ans=%u|ane=%u|tzo=%s|nme=%s",
+                System.version().c_str(), config.versionMajor,
+                config.versionMinor, config.readTimeMs, config.motionTimeMs,
+                config.relayTimeMs, config.relayPauseMs, config.sensorReads,
+                config.sensorThreshold, config.alertEvents,
+                config.alertOpenTimeoutMin, config.alertNightStartMin,
+                config.alertNightEndMin, config.timeZone.data(),
+                config.deviceName.data());
 }
 
-void c_particle::f_updateNetConfig() {
-
-  if (!WiFi.ready())
+void ParticleNode::updateNetworkConfig() {
+  if (!WiFi.ready()) {
     return;
+  }
 
-  IPAddress a_localIp = WiFi.localIP();
-  IPAddress a_netMask = WiFi.subnetMask();
-  IPAddress a_gateway = WiFi.gatewayIP();
+  const IPAddress localIp = WiFi.localIP();
+  const IPAddress netMask = WiFi.subnetMask();
+  const IPAddress gateway = WiFi.gatewayIP();
 
-  byte n_macAddress[6];
-  WiFi.macAddress(n_macAddress);
+  uint8_t macAddress[6];
+  WiFi.macAddress(macAddress);
 
-  sprintf(
-    s_netConfig,
-    "ip=%d.%d.%d.%d|snet=%d.%d.%d.%d|gway=%d.%d.%d.%d|mac=%02X:%02X:%02X:%02X:%02X:%02X|ssid=%s",
-    a_localIp[0], // 4+15 bytes
-    a_localIp[1],
-    a_localIp[2],
-    a_localIp[3],
-    a_netMask[0], // 6+15 bytes
-    a_netMask[1],
-    a_netMask[2],
-    a_netMask[3],
-    a_gateway[0], // 6+15bytes
-    a_gateway[1],
-    a_gateway[2],
-    a_gateway[3],
-    n_macAddress[0], // 5+17bytes
-    n_macAddress[1],
-    n_macAddress[2],
-    n_macAddress[3],
-    n_macAddress[4],
-    n_macAddress[5],
-    WiFi.SSID() // 6+32 bytes
-  );
+  std::snprintf(netConfig_.data(), netConfig_.size(),
+                "ip=%d.%d.%d.%d|snet=%d.%d.%d.%d|gway=%d.%d.%d.%d|mac=%02X:%02X:%02X:%02X:%02X:%02X|ssid=%s",
+                localIp[0], localIp[1], localIp[2], localIp[3], netMask[0],
+                netMask[1], netMask[2], netMask[3], gateway[0], gateway[1],
+                gateway[2], gateway[3], macAddress[0], macAddress[1],
+                macAddress[2], macAddress[3], macAddress[4], macAddress[5],
+                WiFi.SSID().c_str());
 }
+
+}  // namespace garadget
+

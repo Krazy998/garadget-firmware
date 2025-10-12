@@ -1,456 +1,472 @@
-// $Id$
-/**
-* @file config.cpp
-* @brief Implements garadget configuration related functionality
-* @author Denis Grisak
-* @version 1.24
-*/
-// $Log$
-
 #include "config.h"
 
-c_config& c_config::f_getInstance() {
-  static c_config o_config;
-  return o_config;
+#include "global.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+
+namespace garadget {
+
+namespace {
+constexpr std::size_t kTimeBufferSize = 10;
+constexpr std::size_t kTimezoneBufferSize = 25;
+constexpr char kConfigSource[] = "config";
 }
 
-/**
-* Loads saved configuration from EEPROM or defaults
-*/
-bool c_config::f_init() {
-  a_state.n_lastEvent = millis();
+Config& Config::instance() {
+  static Config instance;
+  return instance;
+}
 
-  // read door config from EEPROM
-  EEPROM.get(0, a_config);
-  if (!f_validate()) {
-    f_reset();
-    return FALSE;
+bool Config::init() {
+  state.lastEventMs = millis();
+
+  EEPROM.get(0, config);
+  if (validate() < 0) {
+    reset();
+    return false;
   }
-  Log.info("Config - validated");
 
-  // if integrity check failed then load defaults
-  uint16_t n_savedVersionId = a_config.n_versionMajor * 100 + a_config.n_versionMinor;
-  if (n_savedVersionId != VERSION_ID) {
-    if (n_savedVersionId < VERSION_COMPAT || n_savedVersionId > VERSION_ID) {
-      f_reset();
-      return FALSE;
+  const auto savedVersionId = static_cast<std::uint16_t>(
+      config.versionMajor * 100 + config.versionMinor);
+  if (savedVersionId != constants::kFirmwareId) {
+    if (savedVersionId < constants::kFirmwareCompatId ||
+        savedVersionId > constants::kFirmwareId) {
+      reset();
+      return false;
     }
-    a_config.n_versionMajor = VERSION_MAJOR;
-    a_config.n_versionMinor = VERSION_MINOR;
-    f_save();
+    config.versionMajor = constants::kFirmwareMajor;
+    config.versionMinor = constants::kFirmwareMinor;
+    save();
   }
-  o_timezones.f_setConfig(String(a_config.s_timeZone));
-  return TRUE;
+
+  updateTimezone();
+  return true;
 }
 
-/**
-* validates the current configuration against the boundaries
-*/
-int8_t c_config::f_validate() {
-  return (
-    f_setValue(String("rdt"), String(a_config.n_readTime)) != -1 &&
-    f_setValue(String("mtt"), String(a_config.n_motionTime)) != -1 &&
-    f_setValue(String("rlt"), String(a_config.n_relayTime)) != -1 &&
-    f_setValue(String("rlp"), String(a_config.n_relayPause)) != -1 &&
-    f_setValue(String("srt"), String(a_config.n_sensorThreshold)) != -1 &&
-    f_setValue(String("aev"), String(a_config.n_alertEvents)) != -1 &&
-    f_setValue(String("aot"), String(a_config.n_alertOpenTimeout)) != -1 &&
-    f_setValue(String("ans"), String(a_config.n_alertNightStart)) != -1 &&
-    f_setValue(String("ane"), String(a_config.n_alertNightEnd)) != -1 &&
-    f_setValue(String("tzo"), String(a_config.s_timeZone)) != -1 &&
-    f_setValue(String("mqtt"), String(a_config.n_protocols)) != -1 &&
-//    f_setValue(String("mqip"), String(a_config.n_mqttBrokerIp)) == -1 &&
-    f_setValue(String("mqpt"), String(a_config.n_mqttBrokerPort)) != -1 &&
-    f_setValue(String("mqto"), String(a_config.n_mqttTimeout)) != -1
-  );
-}
-
-/**
-* Saves updated configuration variables to EEPROM
-*/
-void c_config::f_save() {
-  EEPROM.put(0, a_config);
-  b_updated = true;
-}
-
-void c_config::f_process() {
-  if (!b_updated)
+void Config::process() {
+  if (!updated_) {
     return;
-  c_message a_message = {
-    "config",
-    MSG_CONFIG,
-    NULL
-  };
-  f_handle(a_message);
-  b_updated = false;
+  }
+  publishUpdate();
+  updated_ = false;
 }
 
-/**
-* Loads configuration with default values
-*/
-void c_config::f_reset() {
-  f_parse(String("defaults"));
+void Config::save() {
+  EEPROM.put(0, config);
+  updated_ = true;
 }
 
-/**
-* Parses received configuration string and updates the values
-*/
-int8_t c_config::f_parse(String s_newConfig) {
+int8_t Config::parse(const String& incomingConfig) {
+  if (incomingConfig.isEmpty()) {
+    return -1;
+  }
 
-  int n_updates = 0, n_result, n_start = 0, n_end;
-  String s_param, s_value;
-
-  if (s_newConfig.equals("defaults")) {
+  String working = incomingConfig;
+  int updates = 0;
+  if (working.equalsIgnoreCase("defaults")) {
     Log.info("Config - loading defaults");
-    a_config.n_versionMajor = VERSION_MAJOR;
-    a_config.n_versionMinor = VERSION_MINOR;
-    s_newConfig = String(DEFULT_CONFIG);
-    n_updates = 5;
+    config.versionMajor = constants::kFirmwareMajor;
+    config.versionMinor = constants::kFirmwareMinor;
+    working = String(constants::kDefaultConfig);
+    updates = 5;  // parity with legacy firmware
   }
 
-  do {
-    n_end = s_newConfig.indexOf('=', n_start);
-    if (n_end == -1)
-      return -1;
-    s_param = s_newConfig.substring(n_start, n_end).c_str();
-    n_start = n_end + 1;
-
-    n_end = s_newConfig.indexOf('|', n_start);
-    if (n_end == -1) {
-      s_value = s_newConfig.substring(n_start).c_str();
-    }
-    else {
-      s_value = s_newConfig.substring(n_start, n_end).c_str();
-      n_start = n_end + 1;
+  int start = 0;
+  while (start >= 0 && start < working.length()) {
+    const int equals = working.indexOf('=', start);
+    if (equals < 0) {
+      break;
     }
 
-    n_result = f_setValue(s_param, s_value);
-    if (n_result < 0)
+    const int delimiter = working.indexOf('|', equals + 1);
+    const String key = working.substring(start, equals);
+    const String value =
+        delimiter < 0 ? working.substring(equals + 1)
+                      : working.substring(equals + 1, delimiter);
+
+    start = delimiter < 0 ? working.length() : delimiter + 1;
+
+    const int8_t result = setValue(key, value);
+    if (result < 0) {
       continue;
-
-    if (n_result > 0)
-      n_updates++;
+    }
+    if (result > 0) {
+      ++updates;
+    }
   }
-  while (n_end != -1);
 
-  if (n_updates) {
-    Log.info("config - parameters updated: %u", n_updates);
-    f_save();
+  if (updates > 0) {
+    Log.info("Config - parameters updated: %d", updates);
+    save();
   }
-  return n_updates;
+
+  return updates;
 }
 
-int8_t c_config::f_setValue(String s_param, String s_value) {
+int8_t Config::setValue(const String& param, const String& value) {
+  int numericValue = value.toInt();
 
-  int n_value;
-  if (s_param.equals("ver"))
+  if (param.equals("ver")) {
     return 0;
-
-  if (s_param.equals("nme")) {
-    if (s_value.equals(a_config.s_deviceName))
-      return 0;
-    c_config::f_setName(s_value);
-    return 1;
   }
 
-  if (s_param.equals("rdt")) {
-    n_value = s_value.toInt();
-    if (n_value < 200 || n_value > 60000)
-      return -1;
-    if (n_value == a_config.n_readTime)
+  if (param.equals("nme")) {
+    if (value.equals(config.deviceName.data())) {
       return 0;
-    a_config.n_readTime = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("mtt")) {
-    n_value = s_value.toInt();
-    if (n_value < 5000 || n_value > 60000)
-      return -1;
-    if (n_value == a_config.n_motionTime)
-      return 0;
-    a_config.n_motionTime = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("rlt")) {
-    n_value = s_value.toInt();
-    if (n_value < 10 || n_value > 2000)
-      return -1;
-    if (n_value == a_config.n_relayTime)
-      return 0;
-    a_config.n_relayTime = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("rlp")) {
-    n_value = s_value.toInt();
-    if (n_value < 10 || n_value > 5000)
-      return -1;
-    if (n_value == a_config.n_relayPause)
-      return 0;
-    a_config.n_relayPause = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("srt")) {
-    n_value = s_value.toInt();
-    if (n_value < 1 || n_value > 80)
-      return -1;
-    if (n_value == a_config.n_sensorThreshold)
-      return 0;
-    a_config.n_sensorThreshold = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("aev")) {
-    n_value = s_value.toInt();
-    if (n_value > 0b111111111)
-      return -1;
-    if (n_value == a_config.n_alertEvents)
-      return 0;
-    a_config.n_alertEvents = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("aot")) {
-    n_value = s_value.toInt();
-    if (n_value > 43200)
-      return -1;
-    if (n_value == a_config.n_alertOpenTimeout)
-      return 0;
-
-    a_config.n_alertOpenTimeout = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("ans")) {
-    n_value = s_value.toInt();
-    if (n_value >= 1440)
-      return -1;
-    if (n_value == a_config.n_alertNightStart)
-      return 0;
-    a_config.n_alertNightStart = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("ane")) {
-    n_value = s_value.toInt();
-    if (n_value >= 1440)
-      return -1;
-    if (n_value == a_config.n_alertNightEnd)
-      return 0;
-    a_config.n_alertNightEnd = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("tzo")) {
-    if (!o_timezones.f_setConfig(s_value))
-      return -1;
-
-    if (s_value.equals(a_config.s_timeZone))
-      return 0;
-    Log.info("Config - updated Timezone, time now: %s", Time.timeStr().c_str());
-    s_value.toCharArray(a_config.s_timeZone, 25);
-    return 1;
-  }
-
-  if (s_param.equals("mqtt")) {
-    n_value = s_value.toInt();
-    if (n_value > 0b011)
-      return -1;
-    if (n_value == a_config.n_protocols)
-      return 0;
-    a_config.n_protocols = n_value;
-    return 1;
-  }
-
-  if (s_param.equals("mqip")) {
-    uint8_t n_start = 0, n_end, n_return = 0;
-    for (uint8_t n_octet = 0; n_octet < 4; n_octet++) {
-      n_end = s_value.indexOf('.', n_start);
-      n_value = s_value.substring(n_start, n_end).toInt();
-      if (!s_value.length() || n_value > 0xFF)
-        return -1;
-      if (n_value != a_config.n_mqttBrokerIp[n_octet])
-        n_return = 1;
-      a_config.n_mqttBrokerIp[n_octet] = n_value;
-      n_start = n_end + 1;
     }
-    return n_return;
+    setName(value);
+    return 1;
   }
 
-  if (s_param.equals("mqpt")) {
-    n_value = s_value.toInt();
-    if (!n_value || n_value > 0xFFFF)
+  if (param.equals("rdt")) {
+    if (numericValue < 200 || numericValue > 60000) {
       return -1;
-    if (n_value == a_config.n_mqttBrokerPort)
+    }
+    if (numericValue == config.readTimeMs) {
       return 0;
-    a_config.n_mqttBrokerPort = n_value;
+    }
+    config.readTimeMs = numericValue;
     return 1;
   }
 
-  if (s_param.equals("mqus")) {
-    if (s_value.equals(a_config.s_mqttBrokerUser))
-      return 0;
-    s_value = c_config::f_escapeJson(s_value);
-    s_value.toCharArray(a_config.s_mqttBrokerUser, sizeof(a_config.s_mqttBrokerUser));
-    return 1;
-  }
-
-  if (s_param.equals("mqpw")) {
-    if (s_value.equals(a_config.s_mqttBrokerPass))
-      return 0;
-    s_value = c_config::f_escapeJson(s_value);
-    s_value.toCharArray(a_config.s_mqttBrokerPass, sizeof(a_config.s_mqttBrokerPass));
-    return 1;
-  }
-
-  if (s_param.equals("mqto")) {
-    n_value = s_value.toInt();
-    if (n_value > 0xFFFF)
+  if (param.equals("mtt")) {
+    if (numericValue < 5000 || numericValue > 60000) {
       return -1;
-    if (n_value == a_config.n_mqttTimeout)
+    }
+    if (numericValue == config.motionTimeMs) {
       return 0;
-    a_config.n_mqttTimeout = n_value;
+    }
+    config.motionTimeMs = numericValue;
+    return 1;
+  }
+
+  if (param.equals("rlt")) {
+    if (numericValue < 10 || numericValue > 2000) {
+      return -1;
+    }
+    if (numericValue == config.relayTimeMs) {
+      return 0;
+    }
+    config.relayTimeMs = numericValue;
+    return 1;
+  }
+
+  if (param.equals("rlp")) {
+    if (numericValue < 10 || numericValue > 5000) {
+      return -1;
+    }
+    if (numericValue == config.relayPauseMs) {
+      return 0;
+    }
+    config.relayPauseMs = numericValue;
+    return 1;
+  }
+
+  if (param.equals("srt")) {
+    if (numericValue < 1 || numericValue > 80) {
+      return -1;
+    }
+    if (numericValue == config.sensorThreshold) {
+      return 0;
+    }
+    config.sensorThreshold = numericValue;
+    return 1;
+  }
+
+  if (param.equals("srr")) {
+    if (numericValue < 1 || numericValue > 10) {
+      return -1;
+    }
+    if (numericValue == config.sensorReads) {
+      return 0;
+    }
+    config.sensorReads = numericValue;
+    return 1;
+  }
+
+  if (param.equals("aev")) {
+    if (numericValue > 0b111111111) {
+      return -1;
+    }
+    if (numericValue == config.alertEvents) {
+      return 0;
+    }
+    config.alertEvents = numericValue;
+    return 1;
+  }
+
+  if (param.equals("aot")) {
+    if (numericValue > 43200) {
+      return -1;
+    }
+    if (numericValue == config.alertOpenTimeoutMin) {
+      return 0;
+    }
+    config.alertOpenTimeoutMin = numericValue;
+    return 1;
+  }
+
+  if (param.equals("ans")) {
+    if (numericValue < 0 || numericValue >= 1440) {
+      return -1;
+    }
+    if (numericValue == config.alertNightStartMin) {
+      return 0;
+    }
+    config.alertNightStartMin = numericValue;
+    return 1;
+  }
+
+  if (param.equals("ane")) {
+    if (numericValue < 0 || numericValue >= 1440) {
+      return -1;
+    }
+    if (numericValue == config.alertNightEndMin) {
+      return 0;
+    }
+    config.alertNightEndMin = numericValue;
+    return 1;
+  }
+
+  if (param.equals("tzo")) {
+    if (!timezones_.f_setConfig(value)) {
+      return -1;
+    }
+
+    if (value.equals(config.timeZone.data())) {
+      return 0;
+    }
+    Log.info("Config - updated Timezone, time now: %s", Time.timeStr().c_str());
+    value.toCharArray(config.timeZone.data(), kTimezoneBufferSize);
+    updateTimezone();
+    return 1;
+  }
+
+  if (param.equals("mqtt")) {
+    if (numericValue > 0b011) {
+      return -1;
+    }
+    if (numericValue == config.protocols) {
+      return 0;
+    }
+    config.protocols = numericValue;
+    return 1;
+  }
+
+  if (param.equals("mqip")) {
+    std::uint8_t start = 0;
+    std::uint8_t updated = 0;
+    for (std::uint8_t index = 0; index < 4; ++index) {
+      const auto end = value.indexOf('.', start);
+      const int ipPart = value.substring(start, end).toInt();
+      if (!value.length() || ipPart < 0 || ipPart > 0xFF) {
+        return -1;
+      }
+      if (ipPart != config.mqttBrokerIp[index]) {
+        updated = 1;
+      }
+      config.mqttBrokerIp[index] = static_cast<std::uint8_t>(ipPart);
+      start = end + 1;
+    }
+    return updated;
+  }
+
+  if (param.equals("mqpt")) {
+    if (numericValue <= 0 || numericValue > 0xFFFF) {
+      return -1;
+    }
+    if (numericValue == config.mqttBrokerPort) {
+      return 0;
+    }
+    config.mqttBrokerPort = numericValue;
+    return 1;
+  }
+
+  if (param.equals("mqus")) {
+    if (value.equals(config.mqttBrokerUser.data())) {
+      return 0;
+    }
+    const String sanitized = Config::escapeJson(value);
+    sanitized.toCharArray(config.mqttBrokerUser.data(),
+                          config.mqttBrokerUser.size());
+    return 1;
+  }
+
+  if (param.equals("mqpw")) {
+    if (value.equals(config.mqttBrokerPass.data())) {
+      return 0;
+    }
+    const String sanitized = Config::escapeJson(value);
+    sanitized.toCharArray(config.mqttBrokerPass.data(),
+                          config.mqttBrokerPass.size());
+    return 1;
+  }
+
+  if (param.equals("mqto")) {
+    if (numericValue < 0 || numericValue > 0xFFFF) {
+      return -1;
+    }
+    if (numericValue == config.mqttTimeoutMs) {
+      return 0;
+    }
+    config.mqttTimeoutMs = numericValue;
     return 1;
   }
 
   return -1;
 }
 
-void c_config::f_getJsonConfig(char* s_buffer) {
+void Config::getJsonConfig(char* buffer, std::size_t length) const {
+  WiFiAccessPoint accessPoints[1];
+  const int accessPointCount = WiFi.getCredentials(accessPoints, 1);
 
-  WiFiAccessPoint a_accessPoints[1];
-  int n_accessPoints = WiFi.getCredentials(a_accessPoints, 1);
+  const char* ssid = accessPointCount > 0 ? accessPoints[0].ssid : "";
 
-//  byte a_macAddress[6];
-//  WiFi.macAddress(a_macAddress);
-
-  sprintf(
-    s_buffer,
-    "{\"sys\":\"%s\",\"ver\":\"%u.%u\",\"id\":\"%s\",\"ssid\":\"%s\",\"rdt\":%u,\"mtt\":%u,\"rlt\":%u,\"rlp\":%u,\"srt\":%u,\"nme\":\"%s\",\"mqtt\":%u,\"mqip\":\"%u.%u.%u.%u\",\"mqpt\":%u,\"mqus\":\"%s\",\"mqto\":%u}",
-    System.version().c_str(), // +11b
-    a_config.n_versionMajor,
-    a_config.n_versionMinor,
-    System.deviceID().c_str(), // +32b
-    n_accessPoints ? a_accessPoints[0].ssid : "", // +41b
-    a_config.n_readTime,
-    a_config.n_motionTime,
-    a_config.n_relayTime,
-    a_config.n_relayPause,
-    a_config.n_sensorThreshold,
-    c_config::f_escapeJson(String(a_config.s_deviceName)).c_str(),
-    a_config.n_protocols,
-    a_config.n_mqttBrokerIp[0],
-    a_config.n_mqttBrokerIp[1],
-    a_config.n_mqttBrokerIp[2],
-    a_config.n_mqttBrokerIp[3],
-    a_config.n_mqttBrokerPort,
-    c_config::f_escapeJson(String(a_config.s_mqttBrokerUser)).c_str(),
-    a_config.n_mqttTimeout
-  );
+  snprintf(
+      buffer, length,
+      "{\"sys\":\"%s\",\"ver\":\"%u.%u\",\"id\":\"%s\",\"ssid\":\"%s\",\"rdt\":%u,\"mtt\":%u,\"rlt\":%u,\"rlp\":%u,\"srt\":%u,\"nme\":\"%s\",\"mqtt\":%u,\"mqip\":\"%u.%u.%u.%u\",\"mqpt\":%u,\"mqus\":\"%s\",\"mqto\":%u}",
+      System.version().c_str(), config.versionMajor, config.versionMinor,
+      System.deviceID().c_str(), ssid, config.readTimeMs, config.motionTimeMs,
+      config.relayTimeMs, config.relayPauseMs, config.sensorThreshold,
+      Config::escapeJson(String(config.deviceName.data())).c_str(),
+      config.protocols, config.mqttBrokerIp[0], config.mqttBrokerIp[1],
+      config.mqttBrokerIp[2], config.mqttBrokerIp[3], config.mqttBrokerPort,
+      Config::escapeJson(String(config.mqttBrokerUser.data())).c_str(),
+      config.mqttTimeoutMs);
 }
 
-void c_config::f_getJsonStatus(char* s_buffer) {
-  char s_time[10];
-  f_timeInStatus(s_time);
-  sprintf(
-    s_buffer,
-    "{\"status\":\"%s\",\"time\":\"%s\",\"sensor\":%u,\"bright\":%u,\"signal\":%d}",
-    c_config::f_statusString(a_state.n_doorStatus),
-    s_time,
-    a_state.n_sensorReflection,
-    99 - a_state.n_sensorBase * 100 / 4096,
-    (int)WiFi.RSSI()
-  );
+void Config::getJsonStatus(char* buffer, std::size_t length) const {
+  char timeBuffer[kTimeBufferSize] = {0};
+  timeInStatus(timeBuffer, sizeof(timeBuffer));
+
+  snprintf(buffer, length,
+           "{\"status\":\"%s\",\"time\":\"%s\",\"sensor\":%u,\"bright\":%u,\"signal\":%d}",
+           Config::statusToString(state.doorStatus), timeBuffer,
+           state.sensorReflection, 99 - state.sensorBase * 100 / 4096,
+           static_cast<int>(WiFi.RSSI()));
 }
 
-/**
-* Saves specified string as device name
-*/
-void c_config::f_setName(String s_name) {
-  c_config::f_escapeJson(s_name).replace('_', ' ').toCharArray(a_config.s_deviceName, MAXNAMESIZE);
-  Log.info("Config - name changed to %s", s_name.c_str());
+void Config::setName(const String& name) {
+  String sanitized = Config::escapeJson(name);
+  sanitized.replace('_', ' ');
+  sanitized.toCharArray(config.deviceName.data(), config.deviceName.size());
+  Log.info("Config - name changed to %s", sanitized.c_str());
 }
 
-/**
- * Translates enum state to string
- */
-const char* c_config::f_statusString(c_doorStatus n_status) {
-  switch (n_status) {
-    case STATUS_CLOSED:
+const char* Config::statusToString(DoorStatus status) {
+  switch (status) {
+    case DoorStatus::Closed:
       return "closed";
-    case STATUS_OPEN:
+    case DoorStatus::Open:
       return "open";
-    case STATUS_CLOSING:
+    case DoorStatus::Closing:
       return "closing";
-    case STATUS_OPENING:
+    case DoorStatus::Opening:
       return "opening";
-    case STATUS_STOPPED:
+    case DoorStatus::Stopped:
       return "stopped";
-    case STATUS_INIT:
+    case DoorStatus::Init:
       return "initialized";
+    case DoorStatus::Unknown:
+    case DoorStatus::None:
     default:
       return "unknown";
   }
 }
 
-/**
- * Translates string state to enum
- */
-c_doorStatus c_config::f_statusEnum(String s_status) {
-  if (s_status.startsWith("close"))
-    return STATUS_CLOSED;
-  if (s_status.equals("open"))
-    return STATUS_OPEN;
-  if (s_status.equals("closing"))
-    return STATUS_CLOSING;
-  if (s_status.equals("opening"))
-    return STATUS_OPENING;
-  if (s_status.startsWith("stop"))
-    return STATUS_STOPPED;
-  return STATUS_UNKNOWN;
+DoorStatus Config::statusFromString(const String& status) {
+  if (status.startsWith("close")) {
+    return DoorStatus::Closed;
+  }
+  if (status.equals("open")) {
+    return DoorStatus::Open;
+  }
+  if (status.equals("closing")) {
+    return DoorStatus::Closing;
+  }
+  if (status.equals("opening")) {
+    return DoorStatus::Opening;
+  }
+  if (status.startsWith("stop")) {
+    return DoorStatus::Stopped;
+  }
+  return DoorStatus::Unknown;
 }
 
-/**
- * Formats seconds in compact human-readable string
- */
-void c_config::f_formatTime(uint32_t n_time, char* s_time) {
-  n_time /= 1000;
-  char s_units = 's';
-  if (n_time >= 120) {
-    s_units = 'm';
-    n_time /= 60;
-    if (n_time >= 120) {
-      s_units = 'h';
-      n_time /= 60;
-      if (n_time >= 48) {
-        s_units = 'd';
-        n_time /= 24;
+void Config::formatTime(uint32_t timeMs, char* buffer, std::size_t length) {
+  if (!buffer || length == 0) {
+    return;
+  }
+
+  uint32_t value = timeMs / 1000;
+  char unit = 's';
+  if (value >= 120) {
+    unit = 'm';
+    value /= 60;
+    if (value >= 120) {
+      unit = 'h';
+      value /= 60;
+      if (value >= 48) {
+        unit = 'd';
+        value /= 24;
       }
     }
   }
-  sprintf(s_time, "%lu%c", n_time, s_units);
+
+  snprintf(buffer, length, "%lu%c", static_cast<unsigned long>(value), unit);
 }
 
-/**
- * set human-readable string with time since last status change
- */
-void c_config::f_timeInStatus(char* s_time) {
-  f_formatTime(millis() - a_state.n_lastEvent, s_time);
+void Config::timeInStatus(char* buffer, std::size_t length) const {
+  Config::formatTime(millis() - state.lastEventMs, buffer, length);
 }
 
-/**
- * Prepares string to be safely used in JSON
- */
-String c_config::f_escapeJson(String s_string) {
-  String s_result = "";
-  for (uint8_t n_char = 0; n_char < s_string.length(); n_char++) {
-    char c_char = s_string.charAt(n_char);
-    if (c_char < 0x20 || c_char > 0x7E)
+String Config::escapeJson(const String& value) {
+  String result;
+  result.reserve(value.length());
+  for (uint8_t index = 0; index < value.length(); ++index) {
+    const char character = value.charAt(index);
+    if (character < 0x20 || character > 0x7E) {
       continue;
-    s_result.concat(c_char);
+    }
+    result.concat(character);
   }
-  return s_result.replace("\"", "\\\"").replace("\\", "\\\\");
+  result.replace("\\", "\\\\");
+  result.replace("\"", "\\\"");
+  return result;
 }
+
+int8_t Config::validate() {
+  return static_cast<int8_t>(
+      (setValue("rdt", String(config.readTimeMs)) != -1) &&
+      (setValue("mtt", String(config.motionTimeMs)) != -1) &&
+      (setValue("rlt", String(config.relayTimeMs)) != -1) &&
+      (setValue("rlp", String(config.relayPauseMs)) != -1) &&
+      (setValue("srt", String(config.sensorThreshold)) != -1) &&
+      (setValue("srr", String(config.sensorReads)) != -1) &&
+      (setValue("aev", String(config.alertEvents)) != -1) &&
+      (setValue("aot", String(config.alertOpenTimeoutMin)) != -1) &&
+      (setValue("ans", String(config.alertNightStartMin)) != -1) &&
+      (setValue("ane", String(config.alertNightEndMin)) != -1) &&
+      (setValue("tzo", String(config.timeZone.data())) != -1) &&
+      (setValue("mqtt", String(config.protocols)) != -1) &&
+      (setValue("mqpt", String(config.mqttBrokerPort)) != -1) &&
+      (setValue("mqto", String(config.mqttTimeoutMs)) != -1));
+}
+
+void Config::reset() {
+  parse(String("defaults"));
+}
+
+void Config::publishUpdate() {
+  const Message message{kConfigSource, MessageType::Config, nullptr};
+  handleMessage(message);
+}
+
+void Config::updateTimezone() {
+  timezones_.f_setConfig(String(config.timeZone.data()));
+}
+
+}  // namespace garadget
+

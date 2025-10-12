@@ -1,42 +1,34 @@
-// $Id$
-/**
- * @file node-alert.h
- * @brief Implements alerts
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
-#ifndef ALERT_H
-#define ALERT_H
+#pragma once
 
 #include "node.h"
 
-class c_alert : public c_node {
+namespace garadget {
 
-  public:
-    bool f_init();
-    void f_process();
-    bool f_receive(const c_message& a_message);
+class AlertNode : public Node {
+ public:
+  bool init() override;
+  void process() override;
+  bool receive(const Message& message) override;
 
-  protected:
-    bool f_isNight();
-    void f_handleStatus();
-    void f_fireAlert(const char* s_type, const char* s_data);
-    void f_statusAlert();
-    void f_timeoutAlert();
-    void f_nightAlert();
+ private:
+  bool isNight() const;
+  void handleStatus();
+  void fireAlert(const char* type, const char* data);
+  void statusAlert();
+  void timeoutAlert();
+  void nightAlert();
 
-    c_doorStatus* n_status;
-    uint16_t* n_events;
-    uint16_t* n_timeout;
-    uint16_t* n_nightStart;
-    uint16_t* n_nightEnd;
-    c_timeout o_timeout;
+  DoorStatus* status_ = nullptr;
+  std::uint16_t* events_ = nullptr;
+  std::uint16_t* timeoutMinutes_ = nullptr;
+  std::uint16_t* nightStartMinutes_ = nullptr;
+  std::uint16_t* nightEndMinutes_ = nullptr;
+  Timeout timeoutTimer_;
 
-    uint32_t n_timeOpened = 0;
-    uint8_t n_timeoutAlertsFired = 0;
-    uint8_t n_nightAlertsFired = 0;
+  std::uint32_t openedAtMs_ = 0;
+  std::uint8_t timeoutAlertsFired_ = 0;
+  std::uint8_t nightAlertsFired_ = 0;
 };
 
-#endif
+}  // namespace garadget
+

@@ -1,174 +1,134 @@
-// $Id$
-/**
- * @file node-sensor.cpp
- * @brief Implements laser sensor
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "node-sensor.h"
 
-c_sensor& c_sensor::f_getInstance() {
-  static c_sensor o_sensor;
-  return o_sensor;
+namespace garadget {
+
+SensorNode& SensorNode::instance() {
+  static SensorNode instance;
+  return instance;
 }
 
-c_sensor::c_sensor() {
+bool SensorNode::init() {
+  auto& config = getConfig();
+  status_ = &config.state.doorStatus;
+  reflection_ = &config.state.sensorReflection;
+  base_ = &config.state.sensorBase;
+  threshold_ = &config.config.sensorThreshold;
+  scanTimer_.setDuration(&config.config.readTimeMs);
+  motionTimer_.setDuration(&config.config.motionTimeMs);
+  *status_ = DoorStatus::Open;
+
+#if defined(SWITCH_NO) || defined(SWITCH_NC)
+  pinMode(constants::kSensorPin, INPUT_PULLUP);
+#else
+  pinMode(constants::kLaserPin, OUTPUT);
+  digitalWrite(constants::kLaserPin, LOW);
+#endif
+
+  getState();
+  enabled_ = true;
+  return true;
 }
 
-bool c_sensor::f_init() {
-
-  // link config and status values
-  c_config& o_config = f_getConfig();
-  n_status = &o_config.a_state.n_doorStatus;
-  n_reflection = &o_config.a_state.n_sensorReflection;
-  n_base = &o_config.a_state.n_sensorBase;
-  n_threshold = &o_config.a_config.n_sensorThreshold;
-
-  // configure timers
-  o_scanTimer.f_setDuration(&o_config.a_config.n_readTime);
-  o_motionTimer.f_setDuration(&o_config.a_config.n_motionTime);
-  *n_status = STATUS_OPEN;
-
-  // configure hardware
-  #if defined(SWITCH_NO) || defined(SWITCH_NC)
-    // dry contact switch
-    pinMode(PIN_SENSOR, INPUT_PULLUP);
-  #else
-    // laser
-    pinMode(PIN_LASER, OUTPUT);
-    digitalWrite(PIN_LASER, LOW);
-  #endif
-
-  // perform the initial scan
-  f_getState();
-  return TRUE;
-}
-
-void c_sensor::f_process() {
-  if (!o_scanTimer.f_isRunning()) {
-    f_getState();
-    o_scanTimer.f_start();
+void SensorNode::process() {
+  if (!scanTimer_.isRunning()) {
+    getState();
+    scanTimer_.start();
   }
-  if (o_motionTimer.f_isTimeout())
-    f_onMotionEnd();
-}
-
-uint8_t c_sensor::f_read() {
-
-  #if defined(SWITCH_NO)
-    *n_reflection = digitalRead(PIN_SENSOR) ? 0 : 100;
-  #elif defined(SWITCH_NC)
-    *n_reflection = digitalRead(PIN_SENSOR) ? 100 : 0;
-  #else
-    uint32_t
-      n_sumBase = 0,
-      n_sumScan = 0;
-
-    for (uint8_t n_read = SENSOR_READS; n_read > 0; n_read--) {
-      *n_base = analogRead(PIN_PHOTO);
-      n_sumBase += *n_base - SENSOR_BIAS;
-      digitalWriteFast(PIN_LASER, HIGH);
-      delay(1);
-      n_sumScan += *n_base - analogRead(PIN_PHOTO);
-      digitalWriteFast(PIN_LASER, LOW);
-      delay(1);
-    }
-
-    // scan valid - recalculate the reflection
-    if (n_sumBase && n_sumScan <= n_sumBase)
-      *n_reflection = n_sumScan * 100 / n_sumBase;
-  #endif
-  return *n_reflection;
-}
-
-bool c_sensor::f_isTripping() {
-    return (f_read() > *n_threshold);
-}
-
-uint16_t c_sensor::f_getBase() {
-  return *n_base;
-}
-
-/**
- * Using laser sensor determines if door state has changed,
- *  handles the logic and updates
- */
-c_doorStatus c_sensor::f_getState() {
-
-  #ifdef APPVIRTUAL
-    return *n_status == STATUS_CLOSED
-      ? STATUS_CLOSED
-      : STATUS_OPEN;
-  #endif
-  bool b_closed = f_isTripping();
-
-  // re-set state based on sensor
-  if (b_closed && *n_status != STATUS_CLOSED) {
-    f_onChange(STATUS_CLOSED);
+  if (motionTimer_.isTimeout()) {
+    onMotionEnd();
   }
-  // opening initiated
-  else if (!b_closed && *n_status == STATUS_CLOSED) {
-    f_onChange(STATUS_OPENING);
-  }
-  return *n_status;
 }
 
-/**
- * Handles expected end of door motion
- */
-void c_sensor::f_onMotionEnd() {
-  switch (*n_status) {
-    case STATUS_OPENING:
-      f_onChange(STATUS_OPEN);
+std::uint8_t SensorNode::read() {
+#if defined(SWITCH_NO)
+  *reflection_ = digitalRead(constants::kSensorPin) ? 0 : 100;
+#elif defined(SWITCH_NC)
+  *reflection_ = digitalRead(constants::kSensorPin) ? 100 : 0;
+#else
+  std::uint32_t sumBase = 0;
+  std::uint32_t sumScan = 0;
+
+  for (std::uint8_t count = constants::kSensorReadsPerSample; count > 0; --count) {
+    *base_ = analogRead(constants::kPhotoResistorPin);
+    sumBase += *base_ - constants::kSensorBias;
+    digitalWriteFast(constants::kLaserPin, HIGH);
+    delay(1);
+    sumScan += *base_ - analogRead(constants::kPhotoResistorPin);
+    digitalWriteFast(constants::kLaserPin, LOW);
+    delay(1);
+  }
+
+  if (sumBase != 0 && sumScan <= sumBase) {
+    *reflection_ = sumScan * 100 / sumBase;
+  }
+#endif
+  return *reflection_;
+}
+
+bool SensorNode::isTripping() { return read() > *threshold_; }
+
+std::uint16_t SensorNode::baseValue() const { return *base_; }
+
+DoorStatus SensorNode::getState() {
+  if constexpr (build::kUseVirtualDoor) {
+    return *status_ == DoorStatus::Closed ? DoorStatus::Closed : DoorStatus::Open;
+  }
+
+  const bool closed = isTripping();
+  if (closed && *status_ != DoorStatus::Closed) {
+    onChange(DoorStatus::Closed);
+  } else if (!closed && *status_ == DoorStatus::Closed) {
+    onChange(DoorStatus::Opening);
+  }
+  return *status_;
+}
+
+void SensorNode::onMotionEnd() {
+  switch (*status_) {
+    case DoorStatus::Opening:
+      onChange(DoorStatus::Open);
       break;
-
-    case STATUS_CLOSING:
-      #ifdef APPVIRTUAL
-        f_onChange(STATUS_CLOSED);
-      #else
-        if (f_getState() != STATUS_CLOSED)
-          f_onChange(STATUS_STOPPED);
-      #endif
+    case DoorStatus::Closing:
+      if constexpr (build::kUseVirtualDoor) {
+        onChange(DoorStatus::Closed);
+      } else if (getState() != DoorStatus::Closed) {
+        onChange(DoorStatus::Stopped);
+      }
+      break;
+    default:
       break;
   }
 }
 
-/**
- * Register the change of door state
- */
-bool c_sensor::f_onChange(c_doorStatus n_newStatus) {
-  Log.info("Sensor - new status: %s", c_config::f_statusString(n_newStatus));
-  *n_status = n_newStatus;
-  f_getConfig().a_state.n_lastEvent = millis();
-  c_message a_message = {
-    "sensor",
-    MSG_STATUS,
-    n_status
-  };
-  return f_handle(a_message);
+bool SensorNode::onChange(DoorStatus newStatus) {
+  Log.info("Sensor - new status: %s", Config::statusToString(newStatus));
+  *status_ = newStatus;
+  getConfig().state.lastEventMs = millis();
+  const Message statusMessage{"sensor", MessageType::Status, status_};
+  return handleMessage(statusMessage);
 }
 
-/**
- * Control the timers based on simulated status updates
- */
-bool c_sensor::f_receive(const c_message& a_message) {
-  if (a_message.n_type != MSG_STATUS)
+bool SensorNode::receive(const Message& message) {
+  if (message.type != MessageType::Status) {
     return true;
+  }
 
-  switch (*n_status) {
-    case STATUS_OPENING:
-    case STATUS_CLOSING:
-      f_getConfig().a_state.n_lastEvent = millis();
-      o_motionTimer.f_start();
+  switch (*status_) {
+    case DoorStatus::Opening:
+    case DoorStatus::Closing:
+      getConfig().state.lastEventMs = millis();
+      motionTimer_.start();
       break;
-
-    case STATUS_CLOSED:
-    case STATUS_OPEN:
-    case STATUS_STOPPED:
-      o_motionTimer.f_stop();
+    case DoorStatus::Closed:
+    case DoorStatus::Open:
+    case DoorStatus::Stopped:
+      motionTimer_.stop();
+      break;
+    default:
       break;
   }
   return true;
 }
+
+}  // namespace garadget
+

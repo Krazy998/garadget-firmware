@@ -3,6 +3,41 @@ Garadget is the garage door "futurizer". It allows to monitor and operate your e
 
 The code in this repository is for the program that controls Garaget's hardware. It's C++ application similar to those created for popular Arduino boards. You are encouraged to study it, report the problems, modify it, try it with your Garadget and share.
 
+## Building with Particle Workbench or CLI
+
+The firmware targets ParticleOS LTS 2.3.1 for the P1 module. To compile locally with Particle Workbench select **Device OS: 2.3.1 (LTS)** and **Device: P1**, then run `Particle: Compile Application (local)` from the command palette. To build and flash with the Particle CLI:
+
+```bash
+particle login
+particle compile p1 --target 2.3.1-lts
+particle flash --usb <firmware.bin>
+```
+
+Ensure the device is in DFU mode (blinking yellow) before flashing via USB.
+
+## Home Assistant MQTT Example
+
+The firmware now publishes Home Assistant autodiscovery payloads on connect. For manual validation or older installations, the following MQTT cover configuration mirrors the published topics:
+
+```yaml
+cover:
+  - platform: mqtt
+    name: "Garage Door"
+    command_topic: "garadget/<client_id>/command"
+    state_topic: "garadget/<client_id>/status"
+    availability_topic: "garadget/<client_id>/LWT"
+    payload_open: "open"
+    payload_close: "closed"
+    payload_stop: "stopped"
+    payload_available: "Online"
+    payload_not_available: "Offline"
+    state_open: "open"
+    state_closed: "closed"
+    value_template: "{{ value_json.status }}"
+```
+
+Replace `<client_id>` with the configured device name (spaces are converted to underscores) or the Particle device ID if no name is set.
+
 ## Particle Platform
 At the core of the device is Particle Photon P1 module allowing Garadget to benefit from:
 - [powerful hardware](https://docs.particle.io/datasheets/p1-datasheet/#features)
@@ -47,7 +82,7 @@ String `sys=%d.%d.%d|ver=%d.%d|cnt=%d|rdt=%d|mtt=%d|mot=%d|rlt=%d|rlp=%d|srr=%d|
 - `ane` - alert for night time end in minutes from midnight (same value as ans disables, default 360 - 6am)
 - `tzo` - time zone offset or daylight savings time (DST) rule for the region. See details below.
 - `nme` - device name to be used in notifications. At reboot this value will be overwritten with the device name configured in Particle cloud. Update this value to notify the unit about the name change without reboot.
-- `mqon` - MQTT/Cloud enabled flags
+- `mqtt` - MQTT/Cloud enabled flags
 - `mqip` - MQTT server IP address
 - `mqpt` - MQTT server port
 - `mqto` - MQTT server reconnect timeout

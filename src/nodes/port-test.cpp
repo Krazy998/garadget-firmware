@@ -1,116 +1,121 @@
-// $Id$
-/**
-* @file port-test.cpp
-* @brief Implements manufacturing test procedures
-* @author Denis Grisak
-* @version 1.24
-*/
-// $Log$
-
 #include "port-test.h"
 
-const char* c_test::f_getSource() {
-  return "test";
+#include <algorithm>
+#include <array>
+#include <cstring>
+
+namespace garadget {
+
+namespace {
+constexpr std::uint8_t kTestAddress = 0x11;
+constexpr std::uint8_t kDeviceIdSize = 25;
 }
 
-bool c_test::f_init() {
-  n_address = 0x11;
-  if (!c_port::f_init())
-    return FALSE;
-  o_sensor = &c_sensor::f_getInstance();
+const char* TestPort::source() const { return "test"; }
+
+bool TestPort::init() {
+  address_ = kTestAddress;
+  if (!PortNode::init()) {
+    return false;
+  }
+
+  sensor_ = &SensorNode::instance();
 
   Particle.disconnect();
   RGB.control(true);
-  f_sendInfo();
-  f_sendId();
+  sendInfo();
+  sendId();
 
-  // start diagnostic loop
-  for (int n_loop = 0; true; n_loop++) {
-    f_nextColor();
-
-    // every second loop flip the relay
-    if (n_loop % 2)
-      f_toggleRelay();
-    f_sendState();
+  for (int loop = 0;; ++loop) {
+    nextColor();
+    if (loop % 2 == 1) {
+      toggleRelay();
+    }
+    sendState();
 
     if (System.buttonPushed() > 500) {
       RGB.control(false);
-      f_sendState();
+      sendState();
       Particle.connect();
       WiFi.listen();
-      #if defined(SWITCH_NO) || defined(SWITCH_NC)
-        f_close();
-        return true;
-      #endif
+#if defined(SWITCH_NO) || defined(SWITCH_NC)
+      close();
+      return true;
+#endif
       break;
     }
     delay(200);
   }
 
-  for (int n_loop = 0; n_loop < 10; n_loop++) {
-      f_sendState();
-      delay(1000);
+  for (int loop = 0; loop < 10; ++loop) {
+    sendState();
+    delay(1000);
   }
   return true;
 }
 
-void c_test::f_sendInfo() {
-  c_bufferInfo a_data;
-  a_data.a_fields.n_type = 'V';
-  a_data.a_fields.n_systemVer = System.versionNumber();
-  a_data.a_fields.n_firmwareVerMajor = VERSION_MAJOR;
-  a_data.a_fields.n_firmwareVerMinor = VERSION_MINOR;
-//  WiFi.macAddress(a_data.a_fields.a_macAddress);
-  f_busSend(
-    a_data.a_bytes,
-    sizeof(c_bufferInfo)
-  );
+void TestPort::sendInfo() {
+  struct DeviceInfo {
+    char type;
+    std::uint32_t systemVersion;
+    std::uint8_t firmwareMajor;
+    std::uint8_t firmwareMinor;
+  } __attribute__((packed));
+
+  DeviceInfo info{'V', System.versionNumber(), constants::kFirmwareMajor,
+                  constants::kFirmwareMinor};
+  busSend(reinterpret_cast<std::uint8_t*>(&info), sizeof(info));
 }
 
-void c_test::f_sendId() {
-  String s_deviceId = "I" + System.deviceID().toUpperCase();
-  f_busSend(
-    (uint8_t*)s_deviceId.c_str(),
-    DEVICEIDSIZE
-  );
+void TestPort::sendId() {
+  const String deviceId = "I" + System.deviceID().toUpperCase();
+  std::array<std::uint8_t, kDeviceIdSize> buffer{};
+  std::memcpy(buffer.data(), deviceId.c_str(),
+              std::min(deviceId.length(), buffer.size()));
+  busSend(buffer.data(), buffer.size());
 }
 
-void c_test::f_sendState() {
+void TestPort::sendState() {
+  struct DeviceState {
+    char type;
+    std::uint8_t sensorRate;
+    std::uint16_t sensorBase;
+    std::uint16_t buttonPushed;
+    int8_t radioSignal;
+    std::uint8_t ledStep;
+    std::uint8_t relay;
+    std::uint8_t padding;
+  } __attribute__((packed));
 
-    c_bufferState a_data;
-    a_data.a_fields.n_type = 'S';
+  DeviceState state{};
+  state.type = 'S';
+#if defined(SWITCH_NO) || defined(SWITCH_NC)
+  state.sensorRate = 100;
+  state.sensorBase = analogRead(constants::kPhotoResistorPin);
+#else
+  state.sensorRate = sensor_->read();
+  state.sensorBase = sensor_->baseValue();
+#endif
+  state.radioSignal = WiFi.RSSI();
+  state.buttonPushed = System.buttonPushed();
+  state.ledStep = ledStep_;
+  state.relay = relayState_ ? 1 : 0;
+  state.padding = 0;
 
-    // get laser sensor data
-    #if defined(SWITCH_NO) || defined(SWITCH_NC)
-      a_data.a_fields.n_sensorRate = 100;
-      a_data.a_fields.n_sensorBase = analogRead(PIN_PHOTO);
-    #else
-      a_data.a_fields.n_sensorRate = o_sensor->f_read();
-      a_data.a_fields.n_sensorBase = o_sensor->f_getBase();
-    #endif
-    a_data.a_fields.n_radioSignal = WiFi.RSSI();
-    a_data.a_fields.n_buttonPushed = System.buttonPushed();
-    a_data.a_fields.n_ledStep = n_ledStep;
-    a_data.a_fields.b_relay = b_relay;
-    a_data.a_fields.n_padding = 0;
-
-    f_busSend(
-        a_data.a_bytes,
-        sizeof(c_bufferState)
-    );
+  busSend(reinterpret_cast<std::uint8_t*>(&state), sizeof(state));
 }
 
-void c_test::f_nextColor() {
-    n_ledStep = (n_ledStep + 1) % 3;
-    RGB.color(
-        n_ledStep == 0 ? 0xFF : 0x00,
-        n_ledStep == 1 ? 0xFF : 0x00,
-        n_ledStep == 2 ? 0xFF : 0x00
-    );
+void TestPort::nextColor() {
+  ledStep_ = (ledStep_ + 1) % 3;
+  RGB.color(ledStep_ == 0 ? 0xFF : 0x00, ledStep_ == 1 ? 0xFF : 0x00,
+            ledStep_ == 2 ? 0xFF : 0x00);
 }
 
-void c_test::f_toggleRelay() {
-    b_relay = !b_relay;
-    digitalWrite(PIN_RELAY, b_relay);
-    delay(20);
+void TestPort::toggleRelay() {
+  relayState_ = !relayState_;
+  digitalWrite(constants::kRelayPin, relayState_);
+  delay(20);
 }
+
+}  // namespace garadget
+

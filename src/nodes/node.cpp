@@ -1,25 +1,14 @@
-// $Id$
-/**
- * @file node.cpp
- * @brief Abstract class for node implementations
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "node.h"
 
-c_config& c_node::f_getConfig() {
-  return c_config::f_getInstance();
-}
+namespace garadget {
 
-bool c_node::f_init() {
-  return b_enabled;
-}
+Config& Node::getConfig() { return Config::instance(); }
 
-void c_node::f_process() {
-}
+bool Node::init() { return enabled_; }
 
-bool c_node::f_receive(const c_message &a_message) {
-  return TRUE;
-}
+void Node::process() {}
+
+bool Node::receive(const Message&) { return true; }
+
+}  // namespace garadget
+

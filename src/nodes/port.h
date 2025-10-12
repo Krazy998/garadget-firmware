@@ -1,46 +1,38 @@
-// $Id$
-/**
- * @file node.h
- * @brief Abstract class for I2C port accessory
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
-#ifndef PORT_H
-#define PORT_H
+#pragma once
 
 #include "node.h"
 
-class c_port : public c_node {
+#include <array>
 
-  public:
+namespace garadget {
 
-    static uint8_t n_devices;
+class PortNode : public Node {
+ public:
+  static std::uint8_t deviceCount;
 
-    bool f_init();
-    void f_process();
-//    bool f_receive(const c_message& a_message);
-    void f_close();
+  bool init() override;
+  void process() override;
+  void close();
 
-  protected:
+ protected:
+  std::uint8_t address_ = 0x00;
+  const bool input_ = false;
+  const bool output_ = false;
+  const std::uint16_t scanPeriodMs_ = 1000;
 
-    uint8_t n_address = 0x00;
-    const bool b_input = FALSE;
-    const bool b_output = FALSE;
-    const uint16_t n_scanPeriod = 1000; // by default scan every second
+  std::array<std::uint8_t, constants::kPortBufferSize> lastResponse_{};
+  std::uint8_t lastResponseLength_ = 0;
+  PinMode savedSdaMode_;
+  PinMode savedSclMode_;
+  bool savedSdaLevel_ = false;
+  bool savedSclLevel_ = false;
 
-    uint8_t a_lastResponse[PORT_BUFFER];
-    uint8_t n_lastResponse = 0;
-    PinMode n_savedPinModeSda;
-    PinMode n_savedPinModeScl;
-    boolean b_savedPinLevelSda;
-    boolean b_savedPinLevelScl;
-
-    c_timeout o_scanTimer;
-    int8_t f_busSend(uint8_t* a_buffer, uint8_t n_length);
-    int8_t f_busRequest(uint8_t* a_buffer, uint8_t n_maxLength = PORT_BUFFER);
-    const char* f_getSource();
+  Timeout scanTimer_;
+  int8_t busSend(std::uint8_t* buffer, std::uint8_t length);
+  int8_t busRequest(std::uint8_t* buffer,
+                    std::uint8_t maxLength = constants::kPortBufferSize);
+  const char* source();
 };
 
-#endif
+}  // namespace garadget
+

@@ -57,3 +57,4 @@ firmware
 
 # buld folder
 target/*
+src/target/

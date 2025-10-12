@@ -15,7 +15,7 @@
 #include "../command.h"
 #include "../config.h"
 
-struct c_page {
+struct WebPage {
     const char* url;
     const char* mime_type;
     const char* data;

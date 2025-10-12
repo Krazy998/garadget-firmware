@@ -1,147 +1,134 @@
-// $Id$
-/**
- * @file node-relay.cpp
- * @brief Implements relay functions
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "node-relay.h"
 
-bool c_relay::f_init() {
-  // link config and status values
-  c_config& o_config = f_getConfig();
-  n_status = &o_config.a_state.n_doorStatus;
+namespace garadget {
 
-  // configure timers
-  o_onTimer.f_setDuration(&o_config.a_config.n_relayTime);
-  o_offTimer.f_setDuration(&o_config.a_config.n_relayPause);
+bool RelayNode::init() {
+  auto& config = getConfig();
+  status_ = &config.state.doorStatus;
 
-  // configure hardware
-  pinMode(PIN_RELAY, OUTPUT);
-  digitalWrite(PIN_RELAY, LOW);
+  onTimer_.setDuration(&config.config.relayTimeMs);
+  offTimer_.setDuration(&config.config.relayPauseMs);
 
-  return TRUE;
+  pinMode(constants::kRelayPin, OUTPUT);
+  digitalWrite(constants::kRelayPin, LOW);
+
+  enabled_ = true;
+  return true;
 }
 
-void c_relay::f_process() {
-
-  // handle relay clicks
-  if (o_onTimer.f_isTimeout())
-    f_off();
-  else if (o_offTimer.f_isTimeout())
-    f_on();
+void RelayNode::process() {
+  if (onTimer_.isTimeout()) {
+    release();
+  } else if (offTimer_.isTimeout()) {
+    engage();
+  }
 }
 
-/**
- * Garage button push (close relay)
- * Initially called with parameter by the command the by timer without parameter
- * @param[in] uint8_t n_clicks - In initial call specifies number of clicks
- */
-void c_relay::f_on(uint8_t n_clicks) {
-  if (n_clicks)
-    n_clicksLeft = n_clicks;
-  digitalWrite(PIN_RELAY, HIGH);
-  o_onTimer.f_start();
+void RelayNode::engage(std::uint8_t clicks) {
+  if (clicks > 0) {
+    remainingClicks_ = clicks;
+  }
+  digitalWrite(constants::kRelayPin, HIGH);
+  onTimer_.start();
 }
 
-/**
- * Garage button release (open relay)
- * Called by timer
- */
-void c_relay::f_off() {
-  digitalWrite(PIN_RELAY, LOW);
-  n_clicksLeft--;
-  if (n_clicksLeft)
-    o_offTimer.f_start();
+void RelayNode::release() {
+  digitalWrite(constants::kRelayPin, LOW);
+  if (remainingClicks_ > 0) {
+    --remainingClicks_;
+  }
+  if (remainingClicks_ > 0) {
+    offTimer_.start();
+  }
 }
 
-bool c_relay::f_receive(const c_message& a_message) {
-  if (a_message.n_type != MSG_COMMAND)
+bool RelayNode::receive(const Message& message) {
+  if (message.type != MessageType::Command || status_ == nullptr) {
     return true;
+  }
 
-  uint8_t n_clicks = 0;
-  c_doorStatus n_command = *(c_doorStatus*)a_message.p_payload;
-  c_doorStatus n_newStatus = STATUS_UNKNOWN;
+  const auto command = *static_cast<const DoorStatus*>(message.payload);
+  DoorStatus nextStatus = DoorStatus::Unknown;
+  std::uint8_t clicks = 0;
 
-  switch (n_command) {
-
-    // open command
-    case STATUS_OPEN:
-    case STATUS_OPENING:
-      switch (*n_status) {
-        case STATUS_OPEN:
-        case STATUS_OPENING:
+  switch (command) {
+    case DoorStatus::Open:
+    case DoorStatus::Opening:
+      switch (*status_) {
+        case DoorStatus::Open:
+        case DoorStatus::Opening:
           return true;
-        case STATUS_CLOSING:
-          n_newStatus = STATUS_OPENING;
-        case STATUS_CLOSED:
-          // rely on sensor to detect the change of state
-          #ifdef APPVIRTUAL
-            n_newStatus = STATUS_OPENING;
-          #endif
-          n_clicks = 1;
+        case DoorStatus::Closing:
+          nextStatus = DoorStatus::Opening;
+          clicks = 1;
           break;
-        case STATUS_STOPPED:
-          n_newStatus = STATUS_OPENING;
-          n_clicks = 2;
+        case DoorStatus::Closed:
+          if constexpr (build::kUseVirtualDoor) {
+            nextStatus = DoorStatus::Opening;
+          }
+          clicks = 1;
           break;
-        }
-        break;
-
-    // close command
-    case STATUS_CLOSED:
-    case STATUS_CLOSING:
-      switch (*n_status) {
-        case STATUS_CLOSED:
-        case STATUS_CLOSING:
-          return true;
-        case STATUS_OPEN:
-        case STATUS_STOPPED:
-          n_clicks = 1;
+        case DoorStatus::Stopped:
+          nextStatus = DoorStatus::Opening;
+          clicks = 2;
           break;
-        case STATUS_OPENING:
-          n_clicks = 2;
+        default:
           break;
       }
-      n_newStatus = STATUS_CLOSING;
       break;
 
-    // stop command
-    case STATUS_STOPPED:
-      switch (*n_status) {
-        case STATUS_STOPPED:
-        case STATUS_CLOSED:
-        case STATUS_OPEN:
+    case DoorStatus::Closed:
+    case DoorStatus::Closing:
+      switch (*status_) {
+        case DoorStatus::Closed:
+        case DoorStatus::Closing:
           return true;
-        case STATUS_OPENING:
-          n_clicks = 1;
+        case DoorStatus::Open:
+        case DoorStatus::Stopped:
+          clicks = 1;
           break;
-        case STATUS_CLOSING:
-          n_clicks = 2;
+        case DoorStatus::Opening:
+          clicks = 2;
+          break;
+        default:
           break;
       }
-      n_newStatus = STATUS_STOPPED;
+      nextStatus = DoorStatus::Closing;
       break;
 
-    // unknown state
+    case DoorStatus::Stopped:
+      switch (*status_) {
+        case DoorStatus::Stopped:
+        case DoorStatus::Closed:
+        case DoorStatus::Open:
+          return true;
+        case DoorStatus::Opening:
+          clicks = 1;
+          break;
+        case DoorStatus::Closing:
+          clicks = 2;
+          break;
+        default:
+          break;
+      }
+      nextStatus = DoorStatus::Stopped;
+      break;
+
     default:
       return true;
   }
 
-  Log.info("Relay - clicks: %u", n_clicks);
-  f_on(n_clicks);
-  if (n_newStatus == STATUS_UNKNOWN)
+  Log.info("Relay - clicks: %u", clicks);
+  engage(clicks);
+  if (nextStatus == DoorStatus::Unknown) {
     return true;
+  }
 
-  Log.info("Relay - new status: %s", c_config::f_statusString(n_newStatus));
-  *n_status = n_newStatus;
-  c_message a_newMessage = {
-    "relay",
-    MSG_STATUS,
-    n_status
-  };
-
-  return f_handle(a_newMessage);
+  Log.info("Relay - new status: %s", Config::statusToString(nextStatus));
+  *status_ = nextStatus;
+  const Message statusMessage{"relay", MessageType::Status, status_};
+  return handleMessage(statusMessage);
 }
+
+}  // namespace garadget
+

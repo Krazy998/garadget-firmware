@@ -1,103 +1,90 @@
-// $Id$
-/**
- * @file node.cpp
- * @brief Abstract class for I2C port accessory
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "port.h"
 
-uint8_t c_port::n_devices = 0;
+#include <cstring>
 
-const char* c_port::f_getSource() {
-  return "port";
-}
+namespace garadget {
 
-bool c_port::f_init() {
-  Log.info("%s - scanning for connected devices", f_getSource());
-  n_savedPinModeSda = getPinMode(SDA);
-  b_savedPinLevelSda = digitalRead(SDA);
-  n_savedPinModeScl = getPinMode(SCL);
-  b_savedPinLevelScl = digitalRead(SCL);
+std::uint8_t PortNode::deviceCount = 0;
+
+const char* PortNode::source() { return "port"; }
+
+bool PortNode::init() {
+  Log.info("%s - scanning for connected devices", source());
+  savedSdaMode_ = getPinMode(SDA);
+  savedSclMode_ = getPinMode(SCL);
+  savedSdaLevel_ = digitalRead(SDA);
+  savedSclLevel_ = digitalRead(SCL);
+
   Wire.begin();
-  uint8_t a_buffer[PORT_BUFFER];
-  if (f_busRequest(a_buffer) > 0) {
-    b_enabled = TRUE;
-    o_scanTimer.f_setDuration(n_scanPeriod);
-    c_port::n_devices++;
-    Log.info("%s - device connected", f_getSource());
+  std::array<std::uint8_t, constants::kPortBufferSize> buffer{};
+  if (busRequest(buffer.data()) > 0) {
+    enabled_ = true;
+    scanTimer_.setDuration(scanPeriodMs_);
+    ++deviceCount;
+    Log.info("%s - device connected", source());
   }
-  if (!c_port::n_devices) {
-    f_close();
+
+  if (deviceCount == 0) {
+    close();
   }
-  return b_enabled;
+
+  return enabled_;
 }
 
-void c_port::f_process() {
-  if (!b_enabled || !b_input || o_scanTimer.f_isRunning())
+void PortNode::process() {
+  if (!enabled_ || !input_ || scanTimer_.isRunning()) {
     return;
+  }
 
-  uint8_t a_buffer[PORT_BUFFER];
-  uint8_t n_size = f_busRequest(a_buffer, PORT_BUFFER);
+  std::array<std::uint8_t, constants::kPortBufferSize> buffer{};
+  const std::uint8_t length =
+      busRequest(buffer.data(), constants::kPortBufferSize);
 
-  // check if response is any different from previous
-  if (n_size == n_lastResponse && memcmp(a_lastResponse, a_buffer, n_size))
+  if (length == lastResponseLength_ &&
+      std::memcmp(lastResponse_.data(), buffer.data(), length) == 0) {
     return;
+  }
 
-  memcpy(a_lastResponse, a_buffer, n_size);
-  n_lastResponse = n_size;
+  std::memcpy(lastResponse_.data(), buffer.data(), length);
+  lastResponseLength_ = length;
 
-  c_message a_message = {
-    f_getSource(),
-    MSG_PORT,
-    a_lastResponse
-  };
-
-  f_handle(a_message);
-  o_scanTimer.f_start();
+  const Message message{source(), MessageType::Port, lastResponse_.data()};
+  handleMessage(message);
+  scanTimer_.start();
 }
 
-/**
- * Sends data from memory pointer to I2C device
- * @param[in] n_data Pointer to the memory address
- * @param[in] n_length Number of bytes to send
- * @return Length of sent data
- */
-int8_t c_port::f_busSend(uint8_t* a_buffer, uint8_t n_length) {
-  Wire.beginTransmission(n_address);
-  Wire.write(a_buffer, n_length);
+int8_t PortNode::busSend(std::uint8_t* buffer, std::uint8_t length) {
+  Wire.beginTransmission(address_);
+  Wire.write(buffer, length);
   Wire.endTransmission();
-  return n_length;
+  return length;
 }
 
-/**
- * Request data from connected client and receive it into buffer
- * @param[in] n_address Address of slave I2C device
- * @return Length of received response
- */
-int8_t c_port::f_busRequest(uint8_t* a_buffer, uint8_t n_maxLength) {
-  Log.info("%s - requesting data from %u", f_getSource(), n_address);
-  Wire.requestFrom(n_address, n_maxLength);
-  uint32_t n_timeout = millis() + PORT_TIMEOUT;
+int8_t PortNode::busRequest(std::uint8_t* buffer, std::uint8_t maxLength) {
+  Log.info("%s - requesting data from %u", source(), address_);
+  Wire.requestFrom(address_, maxLength);
+  const std::uint32_t timeout = millis() + constants::kPortTimeoutMs;
   while (!Wire.available()) {
-    if (millis() > n_timeout) {
-      Log.info("%s - no response from %u", f_getSource(), n_address);
+    if (millis() > timeout) {
+      Log.info("%s - no response from %u", source(), address_);
       return -1;
     }
   }
-  Log.info("%s - received response from %u", f_getSource(), n_address);
-  uint8_t n_length = 0;
-  for (; Wire.available() && n_length < n_maxLength; n_length++)
-    a_buffer[n_length] = Wire.read();
-  return n_length;
+  Log.info("%s - received response from %u", source(), address_);
+  std::uint8_t length = 0;
+  for (; Wire.available() && length < maxLength; ++length) {
+    buffer[length] = Wire.read();
+  }
+  return length;
 }
 
-void c_port::f_close() {
-    Wire.end();
-    pinMode(SDA, n_savedPinModeSda);
-    digitalWrite(SDA, b_savedPinLevelSda);
-    pinMode(SCL, n_savedPinModeScl);
-    digitalWrite(SCL, b_savedPinLevelScl);
+void PortNode::close() {
+  Wire.end();
+  pinMode(SDA, savedSdaMode_);
+  digitalWrite(SDA, savedSdaLevel_);
+  pinMode(SCL, savedSclMode_);
+  digitalWrite(SCL, savedSclLevel_);
 }
+
+}  // namespace garadget
+

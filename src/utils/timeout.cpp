@@ -1,73 +1,80 @@
-// $Id$
-/**
- * @file timeout.cpp
- * @brief Provides timer related functions to facilitate non-breaking delays
- * @author Denis Grisak
- * @version 1.24
- */
-// $Log$
-
 #include "timeout.h"
 
-c_timeout::c_timeout(uint32_t n_initialDuration) {
-  if (n_initialDuration)
-    f_setDuration(n_initialDuration);
+namespace garadget {
+
+Timeout::Timeout(uint32_t durationMs) { setDuration(durationMs); }
+
+Timeout::Timeout(uint32_t* durationMs) { setDuration(durationMs); }
+
+Timeout::Timeout(uint16_t* durationMs) { setDuration(durationMs); }
+
+void Timeout::setDuration(uint32_t durationMs) {
+  staticDurationMs_ = durationMs;
+  durationLong_ = nullptr;
+  durationShort_ = nullptr;
 }
 
-c_timeout::c_timeout(uint32_t* p_duration) {
-   f_setDuration(p_duration);
+void Timeout::setDuration(uint32_t* durationMs) {
+  durationLong_ = durationMs;
+  durationShort_ = nullptr;
 }
 
-void c_timeout::f_setDuration(uint32_t n_duration) {
-  n_durationLong = n_duration;
-  f_setDuration(&n_durationLong);
+void Timeout::setDuration(uint16_t* durationMs) {
+  durationShort_ = durationMs;
+  durationLong_ = nullptr;
 }
 
-void c_timeout::f_setDuration(uint32_t* p_duration) {
-  p_durationLong = p_duration;
-  p_durationShort = NULL;
-}
-
-void c_timeout::f_setDuration(uint16_t* p_duration) {
-  p_durationShort = p_duration;
-  p_durationLong = NULL;
-}
-
-void c_timeout::f_start() {
-  if (p_durationLong != NULL && *p_durationLong) {
-    n_durationLong = *p_durationLong;
+uint32_t Timeout::resolveDuration() const {
+  if (durationShort_) {
+    return *durationShort_;
   }
-  else if (p_durationShort != NULL && *p_durationShort) {
-    n_durationLong = (uint32_t)*p_durationShort;
+  if (durationLong_) {
+    return *durationLong_;
   }
-  else {
-    f_stop();
-    return;
-  }
-  b_running = TRUE;
-  n_timerStart = millis();
-  n_timerEnd = n_timerStart + n_durationLong;
+  return staticDurationMs_;
 }
 
-void c_timeout::f_stop() {
-  b_running = FALSE;
-};
+void Timeout::start() {
+  start_ = millis();
+  end_ = start_ + resolveDuration();
+  running_ = true;
+}
 
-boolean c_timeout::f_isRunning() {
-  if (!b_running)
-    return FALSE;
-  uint32_t n_nowTime = millis();
-  if (n_nowTime >= n_timerEnd &&
-    (n_timerEnd >= n_timerStart || n_nowTime < n_timerStart)) {
-      f_stop();
+void Timeout::stop() { running_ = false; }
+
+bool Timeout::isRunning() {
+  if (!running_) {
+    return false;
   }
-  return b_running;
-};
-
-boolean c_timeout::f_isTimeout() {
-  return b_running ? !f_isRunning() : FALSE;
+  const uint32_t now = millis();
+  if (now >= end_ && (end_ >= start_ || now < start_)) {
+    running_ = false;
+    return false;
+  }
+  return true;
 }
 
-uint32_t c_timeout::f_timeLeft() {
-  return b_running ? n_timerEnd - millis() : 0;
+bool Timeout::isTimeout() {
+  if (!running_) {
+    return false;
+  }
+  if (millis() >= end_) {
+    running_ = false;
+    return true;
+  }
+  return false;
 }
+
+uint32_t Timeout::timeLeft() const {
+  if (!running_) {
+    return 0;
+  }
+  const uint32_t now = millis();
+  if (now >= end_) {
+    return 0;
+  }
+  return end_ - now;
+}
+
+}  // namespace garadget
+

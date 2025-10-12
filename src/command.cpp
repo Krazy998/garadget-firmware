@@ -1,218 +1,234 @@
 #include "command.h"
 
-// int Command::execute(Reader& reader, Writer& writer) = 0;
+#include <cstddef>
+#include <cstdlib>
+#include <cstring>
 
-jsmntok_t* JSONCommand::json_tokenise(char *s_json) {
+namespace garadget {
+
+int Command::execute(Reader&, Writer&) { return 0; }
+
+jsmntok_t* JsonCommand::tokenise(char* json) {
+  if (!json) {
+    return nullptr;
+  }
+
   jsmn_parser parser;
   parser.size = sizeof(parser);
-  jsmn_init(&parser, NULL);
+  jsmn_init(&parser, nullptr);
 
-  unsigned int n = 64;
-  jsmntok_t* a_tokens = (jsmntok_t*)malloc(sizeof(jsmntok_t) * n);
-  if (!a_tokens) return nullptr;
-  int ret = jsmn_parse(&parser, s_json, strlen(s_json), a_tokens, n, NULL);
-  while (ret == JSMN_ERROR_NOMEM) {
-    n = n * 2 + 1;
-    jsmntok_t* prev = a_tokens;
-    a_tokens = (jsmntok_t*)realloc(a_tokens, sizeof(jsmntok_t) * n);
-    if (!a_tokens) {
-      free(prev);
+  unsigned count = 64;
+  jsmntok_t* tokens = static_cast<jsmntok_t*>(
+      std::malloc(sizeof(jsmntok_t) * count));
+  if (!tokens) {
+    return nullptr;
+  }
+
+  int result = jsmn_parse(&parser, json, std::strlen(json), tokens, count, nullptr);
+  while (result == JSMN_ERROR_NOMEM) {
+    count = count * 2 + 1;
+    jsmntok_t* previous = tokens;
+    tokens = static_cast<jsmntok_t*>(
+        std::realloc(tokens, sizeof(jsmntok_t) * count));
+    if (!tokens) {
+      std::free(previous);
       return nullptr;
     }
-    ret = jsmn_parse(&parser, s_json, strlen(s_json), a_tokens, n, NULL);
+    result = jsmn_parse(&parser, json, std::strlen(json), tokens, count, nullptr);
   }
-  return a_tokens;
+
+  return tokens;
 }
 
-bool JSONCommand::json_token_streq(const char *s_json, jsmntok_t *a_token, const char *s_string) {
-  return (strncmp(s_json + a_token->start, s_string, a_token->end - a_token->start) == 0
-    && strlen(s_string) == (size_t) (a_token->end - a_token->start));
+bool JsonCommand::tokenEquals(const char* json, jsmntok_t* token,
+                              const char* literal) {
+  return std::strncmp(json + token->start, literal, token->end - token->start) == 0 &&
+         std::strlen(literal) == static_cast<std::size_t>(token->end - token->start);
 }
 
-char* JSONCommand::json_token_tostr(char *s_json, jsmntok_t *a_token) {
-  s_json[a_token->end] = '\0';
-  return s_json + a_token->start;
+char* JsonCommand::tokenToString(char* json, jsmntok_t* token) {
+  json[token->end] = '\0';
+  return json + token->start;
 }
 
-void JSONCommand::write_result_code(Writer& writer, int n_result) {
-  write_char(writer, '{');
-  write_json_int(writer, "r", n_result);
-  write_char(writer, '}');
+void JsonCommand::writeResultCode(Writer& writer, int result) {
+  writeChar(writer, '{');
+  writeJsonInt(writer, "r", result);
+  writeChar(writer, '}');
 }
 
-int JSONCommand::parse_request(Reader& reader) {
-  return 0;
+int JsonCommand::parseRequest(Reader&) { return 0; }
+
+void JsonCommand::produceResponse(Writer& writer, int result) {
+  writeResultCode(writer, result);
 }
 
-void JSONCommand::produce_response(Writer& writer, int n_result) {
-  write_result_code(writer, n_result);
+int JsonCommand::process() { return 0; }
+
+void JsonCommand::writeChar(Writer& writer, char c) { writer.write(&c, 1); }
+
+void JsonCommand::writeQuotedString(Writer& writer, const char* value) {
+  writeChar(writer, '"');
+  writer.write(value);
+  writeChar(writer, '"');
 }
 
-int JSONCommand::process() {
-  return 0;
+void JsonCommand::writeJsonString(Writer& writer, const char* name,
+                                  const char* value) {
+  writeQuotedString(writer, name);
+  writeChar(writer, ':');
+  writeQuotedString(writer, value);
 }
 
-void JSONCommand::write_char(Writer& w, char c) {
-  w.write((uint8_t*) & c, 1);
-}
-
-void JSONCommand::write_quoted_string(Writer& out, const char* s_string) {
-  write_char(out, '"');
-  out.write(s_string);
-  write_char(out, '"');
-}
-
-void JSONCommand::write_json_string(Writer& out, const char* s_name, const char* s_value) {
-  write_quoted_string(out, s_name);
-  write_char(out, ':');
-  write_quoted_string(out, s_value);
-}
-
-char* JSONCommand::int_to_ascii(int val, char* buf, int i) {
-  buf[--i] = 0;
-  bool negative = val < 0;
+char* JsonCommand::toAscii(int value, char* buffer, int length) {
+  buffer[--length] = 0;
+  bool negative = value < 0;
   if (negative) {
-    val = -val;
+    value = -value;
   }
-  buf[--i] = (val % 10) + '0';
-  val /= 10;
-  for(; val && i ; val /= 10) {
-    buf[--i] = (val % 10) + '0';
+  buffer[--length] = static_cast<char>((value % 10) + '0');
+  value /= 10;
+  for (; value && length; value /= 10) {
+    buffer[--length] = static_cast<char>((value % 10) + '0');
   }
-  if (negative)
-    buf[--i] = '-';
-  return &buf[i];
+  if (negative) {
+    buffer[--length] = '-';
+  }
+  return &buffer[length];
 }
 
-void JSONCommand::write_json_int(Writer& out, const char* s_name, int n_value) {
-  char buf[20];
-  write_quoted_string(out, s_name);
-  write_char(out, ':');
-  out.write(int_to_ascii(n_value, buf, 20));
+void JsonCommand::writeJsonInt(Writer& writer, const char* name, int value) {
+  char buffer[20];
+  writeQuotedString(writer, name);
+  writeChar(writer, ':');
+  writer.write(toAscii(value, buffer, sizeof(buffer)));
 }
 
-int JSONCommand::execute(Reader& reader, Writer& writer) {
-  int result = parse_request(reader);
+int JsonCommand::execute(Reader& reader, Writer& writer) {
+  int result = parseRequest(reader);
   if (!result) {
     result = process();
-    produce_response(writer, result);
+    produceResponse(writer, result);
   }
   return result;
 }
 
-/**
- * A command that parses a JSON request.
- */
-int JSONRequestCommand::parse_json_string(char* s_json, const char* const a_keys[], const jsmntype_t a_types[], unsigned n_types) {
-  if (!s_json)
+bool JsonRequestCommand::parsedValue(unsigned, jsmntok_t*, char*) { return false; }
+
+int JsonRequestCommand::parseJsonString(char* json, const char* const keys[],
+                                        const jsmntype_t types[],
+                                        std::size_t count) {
+  if (!json) {
     return -1;
-
-  int n_result = -1;
-  jsmntok_t *a_tokens = json_tokenise(s_json);
-
-  if (a_tokens) {
-    enum c_parseState { START, KEY, VALUE, SKIP, STOP };
-
-    c_parseState n_state = START;
-    jsmntype_t expected_type = JSMN_OBJECT;
-
-  	n_result = 0;
-  	int n_key = -1;
-
-    for (size_t n_token = 0, j = 1; j > 0; n_token++, j--) {
-      jsmntok_t *a_token = &a_tokens[n_token];
-
-      if (a_token->type == JSMN_ARRAY || a_token->type == JSMN_OBJECT)
-        j += a_token->size * 2;
-
-      switch (n_state) {
-        case START:
-          n_state = KEY;
-          break;
-
-        case KEY:
-          n_state = VALUE;
-          n_key = -1;
-          for (size_t n_type = 0; n_type < n_types; n_type++) {
-            if (json_token_streq(s_json, a_token, a_keys[n_type])) {
-              expected_type = a_types[n_type];
-              n_key = n_type;
-//              Log.info("key: %s %d %d", a_keys[n_type], n_type, (int)expected_type);
-            }
-          }
-          if (n_key == -1) {
-            Log.warn("JSON Unknown Key: %s", json_token_tostr(s_json, a_token));
-            n_result = -1;
-          }
-          break;
-
-        case VALUE:
-          if (n_key != -1) {
-            if (a_token->type != expected_type) {
-              n_result = -1;
-              Log.error("JSON Type Mismatch");
-            }
-            else {
-              char *s_string = json_token_tostr(s_json, a_token);
-              if (!parsed_value(n_key, a_token, s_string))
-                n_result = -1;
-            }
-          }
-          n_state = KEY;
-          break;
-
-        case STOP: // Just consume the tokens
-          break;
-
-        default:
-          n_result = -1;
-      }
-    }
-    free(a_tokens);
   }
-  return n_result;
+
+  int result = -1;
+  jsmntok_t* tokens = tokenise(json);
+  if (!tokens) {
+    return result;
+  }
+
+  enum class ParseState { Start, Key, Value, Skip, Stop };
+  ParseState state = ParseState::Start;
+  jsmntype_t expectedType = JSMN_OBJECT;
+  result = 0;
+  int keyIndex = -1;
+
+  for (std::size_t tokenIndex = 0, j = 1; j > 0; ++tokenIndex, --j) {
+    jsmntok_t* token = &tokens[tokenIndex];
+
+    if (token->type == JSMN_ARRAY || token->type == JSMN_OBJECT) {
+      j += token->size * 2;
+    }
+
+    switch (state) {
+      case ParseState::Start:
+        state = ParseState::Key;
+        break;
+
+      case ParseState::Key:
+        state = ParseState::Value;
+        keyIndex = -1;
+        for (std::size_t typeIndex = 0; typeIndex < count; ++typeIndex) {
+          if (tokenEquals(json, token, keys[typeIndex])) {
+            expectedType = types[typeIndex];
+            keyIndex = static_cast<int>(typeIndex);
+          }
+        }
+        if (keyIndex == -1) {
+          Log.warn("JSON Unknown Key: %s", tokenToString(json, token));
+          result = -1;
+        }
+        break;
+
+      case ParseState::Value:
+        if (keyIndex != -1) {
+          if (token->type != expectedType) {
+            result = -1;
+            Log.error("JSON Type Mismatch");
+          } else {
+            char* str = tokenToString(json, token);
+            if (!parsedValue(keyIndex, token, str)) {
+              result = -1;
+            }
+          }
+        }
+        state = ParseState::Key;
+        break;
+
+      case ParseState::Skip:
+      case ParseState::Stop:
+      default:
+        break;
+    }
+  }
+
+  std::free(tokens);
+  return result;
 }
 
-int JSONRequestCommand::parse_json_request(Reader& reader, const char* const a_keys[], const jsmntype_t a_types[], unsigned n_types) {
-  char* s_json = reader.fetch_as_string();
-  int n_result = parse_json_string(s_json, a_keys, a_types, n_types);
-  free(s_json);
-  return n_result;
+int JsonRequestCommand::parseJsonRequest(Reader& reader, const char* const keys[],
+                                         const jsmntype_t types[],
+                                         std::size_t count) {
+  char* json = reader.fetch_as_string();
+  const int result = parseJsonString(json, keys, types, count);
+  std::free(json);
+  return result;
 }
 
-int SetConfigCommand::execute(Reader& o_reader, Writer& o_writer) {
-  int n_result = parse_json_request(o_reader, KEY, TYPE, arraySize(KEY));
-  o_config.f_save();
-  produce_response(o_writer, n_result);
-  return n_result;
+SetConfigCommand::SetConfigCommand() : config_(Config::instance()) {}
+
+int SetConfigCommand::execute(Reader& reader, Writer& writer) {
+  constexpr std::size_t keyCount = sizeof(kKeys) / sizeof(kKeys[0]);
+  const int result = parseJsonRequest(reader, kKeys, kTypes, keyCount);
+  config_.save();
+  produceResponse(writer, result);
+  return result;
 }
 
-int SetConfigCommand::execute(char* s_config) {
-  int n_result = parse_json_string(s_config, KEY, TYPE, arraySize(KEY));
-  o_config.f_save();
-  return n_result;
+int SetConfigCommand::execute(char* configPayload) {
+  constexpr std::size_t keyCount = sizeof(kKeys) / sizeof(kKeys[0]);
+  const int result =
+      parseJsonString(configPayload, kKeys, kTypes, keyCount);
+  config_.save();
+  return result;
 }
 
-bool SetConfigCommand::parsed_value(unsigned n_key, jsmntok_t* a_type, char* s_value) {
-  Log.info("JSON Key: %s, Value: %s", KEY[n_key], (char*)s_value);
-  int8_t n_result = o_config.f_setValue(String(KEY[n_key]), String(s_value));
-  return (n_result != -1);
+bool SetConfigCommand::parsedValue(unsigned index, jsmntok_t*, char* value) {
+  Log.info("JSON Key: %s, Value: %s", kKeys[index], value);
+  const int8_t result = config_.setValue(String(kKeys[index]), String(value));
+  return result != -1;
 }
 
-c_config& SetConfigCommand::o_config = c_config::f_getInstance();
-const char* SetConfigCommand::KEY[13] = {"nme","rdt","mtt","rlt","rlp","srr","srt","mqtt","mqip","mqpt","mqus","mqpw","mqto"};
-const jsmntype_t SetConfigCommand::TYPE[] = {
-  JSMN_STRING,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_PRIMITIVE,
-  JSMN_STRING,
-  JSMN_PRIMITIVE,
-  JSMN_STRING,
-  JSMN_STRING,
-  JSMN_PRIMITIVE
-};
+const char* SetConfigCommand::kKeys[13] = {"nme", "rdt", "mtt", "rlt", "rlp",
+                                           "srr", "srt", "mqtt", "mqip", "mqpt",
+                                           "mqus", "mqpw", "mqto"};
+
+const jsmntype_t SetConfigCommand::kTypes[] = {
+    JSMN_STRING,    JSMN_PRIMITIVE, JSMN_PRIMITIVE, JSMN_PRIMITIVE,
+    JSMN_PRIMITIVE, JSMN_PRIMITIVE, JSMN_PRIMITIVE, JSMN_PRIMITIVE,
+    JSMN_STRING,    JSMN_PRIMITIVE, JSMN_STRING,    JSMN_STRING,
+    JSMN_PRIMITIVE};
+
+}  // namespace garadget
+
