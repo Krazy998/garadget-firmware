@@ -54,6 +54,7 @@ private:
 
     Timer openTimeoutTimer_;
     uint32_t openedAtMs_ = 0;
+    uint16_t activeTimeoutSec_ = 0;
     bool timeoutFired_ = false;
     bool nightFired_ = false;
 

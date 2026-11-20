@@ -503,10 +503,11 @@ void HaMqttBridge::tick(uint32_t nowMs) {
         discoveryStep_++;
     }
 
-    // Periodic status heartbeat (every 60s, or sooner if reflection changed notably)
+    // Periodic status heartbeat (every 60s, or debounced every >=5s if reflection changed notably)
     uint8_t curRefl = door_.lastReading().reflectionPct;
-    bool reflShift = (lastPublishedReflection_ == 255) ||
+    bool reflDelta = (lastPublishedReflection_ == 255) ||
                      (curRefl > lastPublishedReflection_ ? (curRefl - lastPublishedReflection_) : (lastPublishedReflection_ - curRefl)) >= 5;
+    bool reflShift = reflDelta && (!reflPublishCooldown_.isRunning() || reflPublishCooldown_.expired(nowMs));
     if (periodicStatusTimer_.expired(nowMs) || reflShift) {
         publishStatus(nowMs);
         periodicStatusTimer_.start(nowMs, 60000);
@@ -526,6 +527,7 @@ void HaMqttBridge::publishStatus(uint32_t nowMs) {
 
     const SensorReading& r = door_.lastReading();
     lastPublishedReflection_ = r.reflectionPct;
+    reflPublishCooldown_.start(nowMs, 5000);
 
     char payload[256];
     JsonWriter w(payload, sizeof(payload));
@@ -555,7 +557,7 @@ void HaMqttBridge::publishConfig() {
     wifi_.formatMac(mac, sizeof(mac));
     String sysVer = System.version();
 
-    char payload[768];
+    char payload[1152];
     config_.toJson(payload, sizeof(payload), deviceId_, sysVer.c_str(), ssid, ip, mac);
     client_.publish(topic, payload, true);
 }

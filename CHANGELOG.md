@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.2.1] - 2026-11-21
+
+### Security
+- **Mandatory Web Admin Password Setup**: When no Web Admin Password is configured (first boot or after factory reset), all `/api/*` endpoints return `428 Precondition Required` and the LAN Web UI prompts the user to create an admin password (minimum 4 characters) via `POST /api/setup-password` before exposing door controls, settings, or OTA updates.
+- **SoftAP Password Setup & Recovery**: Updated the SoftAP portal (`192.168.0.1`) to require setting a Web Admin Password alongside Wi-Fi on first-time setup, and added support for resetting a forgotten Web Admin Password directly in Wi-Fi Setup Mode (including a **Reset Admin Password Only** option via `/exit-setup` that keeps existing Wi-Fi credentials).
+- **SNTP Anti-Spoofing**: Verified incoming UDP/123 replies against the expected NTP server IP, source port `123`, server mode (`4`), non-zero stratum (rejecting Kiss-o'-Death packets), and a 64-bit transmit timestamp nonce echoed in Originate Timestamp. Also added direct IPv4 literal parsing for air-gapped LAN NTP servers.
+- **Per-IP Auth Rate Limiting**: Upgraded `AuthRateLimiter` to track failed attempts per client IP (4 slots) so failed requests from one LAN host cannot lock out the legitimate admin.
+- **SoftAP Auto-Exit Timeout**: Automatically exits Wi-Fi Setup Mode after 10 minutes of inactivity when saved Wi-Fi credentials already exist (activity resets the timer).
+- **CI & Supply-Chain Hardening**: Scoped GitHub Actions `contents: write` exclusively to the tag-triggered `release` job and added SHA-256 checksum verification for prebuilt Device OS 3.3.1 binaries in `scripts/setup-toolchain.sh`.
+
+### Fixed
+- **Atomic Config Validation & Rollback**: Added backup + `validate()` + rollback to `applyPipeConfig()` (preventing invalid `ipm=1` pipe commands from triggering a factory reset on reboot) and made `applyJsonConfig()` fail atomically instead of silently dropping invalid fields when another field succeeds.
+- **JSON & HTTP Buffer Sizing**: Increased `toJson()` output buffers to `1152` bytes (`ha_mqtt.cpp`, `softap_portal.cpp`, `serial_cli.cpp`), `MqttClient::kBufferSize` to `1280` bytes, and `WebServer` request buffer to `2560` bytes with proper `413 Payload Too Large` and `431 Request Header Fields Too Large` responses.
+- **OTA Flash Alignment & Header Length Validation**: Enforced exact chunk reads during streaming OTA so STM32F205 flash writes stay 4-byte aligned, verified `(endAddr - startAddr) + 4 == totalLength` in `OtaValidator::validateHeader()`, and temporarily restored LED visibility during OTA when Stealth Mode is active.
+- **`clear-wifi` Static IP Cleanup**: Reset `ipMode = 0` (DHCP) in EEPROM when clearing Wi-Fi credentials from LAN, SoftAP, or Serial CLI so stale Static IP configs cannot make the device unreachable on a new subnet.
+- **Reliability & UI Fixes**:
+  - Guarded `checkModeButton()` against repeated EEPROM/DCT writes during a 10s factory-reset hold.
+  - Applied timezone immediately on warm reboot (`setup()`) and ran DST checks whenever `Time.isValid()`.
+  - Tuned MQTT keepalive `PINGREQ` to `75%` of `keepAliveSec` (refreshed on outgoing packets) with unconditional `gMqttTcp.stop()`, and debounced ±5% reflection-only MQTT publishes to at most once per 5 seconds.
+  - Fixed Web UI `saveAdminPass()` to wait for HTTP `200 OK` before updating `sessionStorage`, fixed the MQTT topic preview regex, validated `POST /api/system` action names (`400` on unknown actions), updated running open-timeout timers immediately when `aot` changes, preserved SoftAP MQTT toggle state, and drove relay/laser latches `LOW` before setting `OUTPUT` mode.
+
+---
+
 ## [3.2.0] - 2026-11-20
 
 ### Added
@@ -55,6 +78,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed (vs. Legacy Garadget v1.26)
 - Eliminated `sprintf` buffer overflows, MQTT heap leaks on config reload, infinite blocking TCP socket reads, unsigned integer underflow in laser reflection math, and unverified EEPROM config loads (now CRC32-protected with 60s `ApplicationWatchdog` and boot-safe `PIN_RELAY` LOW).
 
+[3.2.1]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/Krazy998/garadget-firmware/releases/tag/v3.0.0

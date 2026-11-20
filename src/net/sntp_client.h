@@ -38,6 +38,9 @@ private:
     bool synced_ = false;
     bool udpStarted_ = false;
     uint32_t lastSyncUptimeSec_ = 0;
+    uint8_t expectedServerIp_[4]{};
+    uint32_t txSec_ = 0;
+    uint32_t txFrac_ = 0;
 };
 
 } // namespace garadget

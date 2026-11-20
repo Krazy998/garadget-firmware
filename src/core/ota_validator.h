@@ -52,6 +52,9 @@ public:
         if (endAddr <= startAddr || endAddr > kP1UserEndLimit) {
             return "invalid_end_addr";
         }
+        if (static_cast<size_t>(endAddr - startAddr) + 4u != totalLength) {
+            return "length_mismatch";
+        }
         if (platId != kP1PlatformId) {
             return "wrong_platform";
         }

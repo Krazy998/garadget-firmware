@@ -49,7 +49,7 @@ struct DeviceConfig {
     char mqttPass[kMqttPassCap];     // mqpw: optional password
     char haPrefix[kHaPrefixCap];     // hapfx: HA discovery prefix (default "homeassistant")
 
-    // Optional local Web UI admin password (empty = open on LAN)
+    // Mandatory local Web UI admin password (empty only before first-time setup or after factory reset)
     char adminPass[kAdminPassCap];   // apass
 
     // Optional Static IPv4 & DNS configuration (added in schema v3)
@@ -95,8 +95,10 @@ public:
 
     // Sets a single parameter by key & string value.
     // Returns: -1 on validation error, 0 if unchanged, +1 if updated.
-    // Set allowAdminPass=false on untrusted channels (MQTT, SoftAP) to prevent changing `apass`.
+    // Set allowAdminPass=false on untrusted channels (MQTT) to prevent changing `apass`.
     int setParam(const char* key, const char* value, bool allowAdminPass = true);
+
+    bool hasAdminPassword() const { return cfg_.adminPass[0] != '\0'; }
 
     // Parses legacy pipe-delimited string ("rdt=1000|srt=20|nme=Garage") or "defaults".
     // Returns number of updated parameters, or -1 on parse failure.

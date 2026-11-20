@@ -1,5 +1,5 @@
 /**
- * Garadget Local Firmware v3.2.0
+ * Garadget Local Firmware v3.2.1
  * Target: Particle P1 (STM32F205 + BCM43362) running Particle Device OS 3.3.1
  *
  * Completely local, cloud-free rewrite:
@@ -164,6 +164,11 @@ void onSystemAction(const char* action, void*) {
         gWifi.enterSetupMode();
     } else if (std::strcmp(action, "clear-wifi") == 0) {
         Log.warn("System: clearing saved Wi-Fi credentials and entering setup mode");
+        if (gConfig.data().ipMode != 0) {
+            gConfig.mutableData().ipMode = 0;
+            gConfig.save(gStorage);
+            snapshotIpCfg(gConfig.data());
+        }
         gWifi.clearCredentials();
         gWifi.enterSetupMode();
     } else if (std::strcmp(action, "reboot") == 0) {
@@ -181,6 +186,7 @@ void onSystemAction(const char* action, void*) {
 }
 
 void checkModeButton() {
+    if (gPendingReboot) return;
     uint32_t heldMs = System.buttonPushed();
     if (heldMs >= 10000u) {
         onSystemAction("factory-reset", nullptr);
@@ -218,6 +224,7 @@ void setup() {
     gLastWifiListening = gWifi.isListening();
     applyLedSettings();
     gSntp.init();
+    gSntp.applyTimezoneNow();
 
     gMqtt.setHooks(onConfigSaved, onSystemAction, nullptr);
     gMqtt.init(now);

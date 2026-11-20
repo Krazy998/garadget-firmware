@@ -10,7 +10,7 @@ namespace garadget {
 // Safe, zero-heap, non-blocking MQTT 3.1.1 client for Particle Device OS.
 class MqttClient {
 public:
-    static constexpr size_t kBufferSize = 1024;
+    static constexpr size_t kBufferSize = 1280;
 
     using ConnectCallback = void (*)(void* ctx);
     using MessageCallback = void (*)(const char* topic, const char* payload, size_t payloadLen, void* ctx);

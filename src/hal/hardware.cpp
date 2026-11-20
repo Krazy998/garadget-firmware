@@ -24,12 +24,12 @@ bool EepromStorage::write(const void* src, size_t len) {
 }
 
 void P1DoorHardware::init(SensorMode initialMode) {
-    // Safety first: ensure relay output is LOW before enabling output driver
-    pinMode(kPinRelay, OUTPUT);
+    // Safety first: drive output latches LOW before enabling output drivers
     digitalWrite(kPinRelay, LOW);
+    pinMode(kPinRelay, OUTPUT);
 
-    pinMode(kPinLaser, OUTPUT);
     digitalWrite(kPinLaser, LOW);
+    pinMode(kPinLaser, OUTPUT);
 
     initialized_ = true;
     configureSensorMode(initialMode);

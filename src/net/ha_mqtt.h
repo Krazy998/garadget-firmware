@@ -73,6 +73,7 @@ private:
 
     Timer reconnectTimer_;
     Timer periodicStatusTimer_;
+    Timer reflPublishCooldown_;
     uint32_t backoffMs_ = 2000;
     uint8_t discoveryStep_ = kDiscoveryEntityCount; // < kDiscoveryEntityCount means publishing in progress
     uint8_t lastPublishedReflection_ = 255;

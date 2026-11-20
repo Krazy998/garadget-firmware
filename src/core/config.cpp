@@ -203,7 +203,10 @@ bool ConfigManager::isValidHostOrEmpty(const char* host) {
 int ConfigManager::setParam(const char* key, const char* value, bool allowAdminPass) {
     if (!key || !value) return -1;
 
-    if (std::strcmp(key, "ver") == 0 || std::strcmp(key, "sys") == 0 || std::strcmp(key, "id") == 0) {
+    if (std::strcmp(key, "ver") == 0 || std::strcmp(key, "sys") == 0 ||
+        std::strcmp(key, "id") == 0 || std::strcmp(key, "ssid") == 0 ||
+        std::strcmp(key, "ip") == 0 || std::strcmp(key, "mac") == 0 ||
+        std::strcmp(key, "mqpwSet") == 0 || std::strcmp(key, "apassSet") == 0) {
         return 0; // Read-only informational fields
     }
 
@@ -403,6 +406,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
         if (!allowAdminPass) return -1;
         char clean[kAdminPassCap];
         sanitizeAscii(clean, sizeof(clean), value);
+        if (std::strlen(clean) < kMinAdminPassLen) return -1;
         if (std::strcmp(clean, cfg_.adminPass) == 0) return 0;
         std::strncpy(cfg_.adminPass, clean, sizeof(cfg_.adminPass) - 1);
         cfg_.adminPass[sizeof(cfg_.adminPass) - 1] = '\0';
@@ -489,14 +493,24 @@ int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
         return 1;
     }
 
+    DeviceConfig backup = cfg_;
+    Timezone tzBackup = tz_;
     int updates = 0;
     const char* cur = pipeStr;
     while (*cur) {
         const char* eq = std::strchr(cur, '=');
-        if (!eq) return -1;
+        if (!eq) {
+            cfg_ = backup;
+            tz_ = tzBackup;
+            return -1;
+        }
 
         size_t klen = static_cast<size_t>(eq - cur);
-        if (klen == 0 || klen >= 32) return -1;
+        if (klen == 0 || klen >= 32) {
+            cfg_ = backup;
+            tz_ = tzBackup;
+            return -1;
+        }
         char key[32];
         std::memcpy(key, cur, klen);
         key[klen] = '\0';
@@ -504,16 +518,30 @@ int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
         const char* valStart = eq + 1;
         const char* pipe = std::strchr(valStart, '|');
         size_t vlen = pipe ? static_cast<size_t>(pipe - valStart) : std::strlen(valStart);
-        if (vlen >= 96) return -1;
+        if (vlen >= 96) {
+            cfg_ = backup;
+            tz_ = tzBackup;
+            return -1;
+        }
         char val[96];
         std::memcpy(val, valStart, vlen);
         val[vlen] = '\0';
 
         int res = setParam(key, val, allowAdminPass);
+        if (res < 0) {
+            cfg_ = backup;
+            tz_ = tzBackup;
+            return -1;
+        }
         if (res > 0) updates++;
 
         if (!pipe) break;
         cur = pipe + 1;
+    }
+    if (!validate()) {
+        cfg_ = backup;
+        tz_ = tzBackup;
+        return -1;
     }
     return updates;
 }
@@ -533,18 +561,18 @@ int ConfigManager::applyJsonConfig(const char* json, size_t len, bool allowAdmin
         int res = c->self->setParam(key, value, c->allowAdminPass);
         if (res < 0) {
             c->hadError = true;
-            return true; // Continue parsing remaining valid keys
+            return false; // Fail fast and roll back atomically
         }
         if (res > 0) c->updates++;
         return true;
     };
 
-    if (!parseFlatJsonObject(json, len, cb, &ctx) || !validate()) {
+    if (!parseFlatJsonObject(json, len, cb, &ctx) || ctx.hadError || !validate()) {
         cfg_ = backup;
         tz_ = tzBackup;
         return -1;
     }
-    return ctx.hadError && ctx.updates == 0 ? -1 : ctx.updates;
+    return ctx.updates;
 }
 
 void ConfigManager::toJson(char* out, size_t outCap,

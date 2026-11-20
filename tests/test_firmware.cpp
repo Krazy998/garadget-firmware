@@ -353,6 +353,16 @@ void testAlertEngine() {
     alerts.onStatusChange(DoorStatus::Closed, 70000);
     assert(alerts.historyCount() == 3);
     assert(std::strcmp(alerts.historyItem(0).type, "night") == 0);
+
+    // Changing aot while door is already open reschedules timer dynamically
+    fired.clear();
+    alerts.onStatusChange(DoorStatus::Open, 80000);
+    assert(fired.size() == 1); // state:open
+    cfgMgr.setParam("aot", "15");
+    alerts.tick(DoorStatus::Open, 90000, true, 840);
+    assert(fired.size() == 1); // 10s elapsed < 15s
+    alerts.tick(DoorStatus::Open, 95000, true, 840);
+    assert(fired.size() == 2 && fired[1] == "timeout:15s");
 }
 
 void testMqttAndHaDiscovery() {
@@ -451,6 +461,10 @@ void testOtaValidator() {
     // Oversized binary (>128KB) must be rejected
     assert(std::strcmp(OtaValidator::validateHeader(bin.data(), 131073), "invalid_size") == 0);
 
+    // Length mismatch (truncated or padded relative to endAddr - startAddr + 4) must be rejected
+    assert(std::strcmp(OtaValidator::validateHeader(bin.data(), bin.size() - 4), "length_mismatch") == 0);
+    assert(std::strcmp(OtaValidator::validateHeader(bin.data(), bin.size() + 4), "length_mismatch") == 0);
+
     // Single-bit flip in payload must fail CRC32
     auto corrupted = bin;
     corrupted[500] ^= 0x01;
@@ -505,26 +519,68 @@ void testHttpSecurityAndAcl() {
         "Content-Type: application/octet-stream\r\n\r\n";
     assert(verifyCsrfProtection(validOtaReq, std::strlen(validOtaReq), "POST", "/api/ota"));
 
-    // 4. Auth rate limiter locks out after 5 failures and unlocks after 10s
+    // 4. Per-IP auth rate limiter locks out offending IP after 5 failures without blocking another IP
     AuthRateLimiter lim;
+    const uint32_t ipA = 0xC0A8010Au;
+    const uint32_t ipB = 0xC0A8010Bu;
     for (int i = 0; i < 4; ++i) {
-        lim.recordFailure(1000);
-        assert(!lim.isLockedOut(1000));
+        lim.recordFailure(1000, ipA);
+        assert(!lim.isLockedOut(1000, ipA));
     }
-    lim.recordFailure(1000);
-    assert(lim.isLockedOut(1000));
-    assert(lim.isLockedOut(10999));
-    assert(!lim.isLockedOut(11000));
+    lim.recordFailure(1000, ipA);
+    assert(lim.isLockedOut(1000, ipA));
+    assert(!lim.isLockedOut(1000, ipB)); // Other client unaffected!
+    assert(lim.isLockedOut(10999, ipA));
+    assert(!lim.isLockedOut(11000, ipA));
 
-    // 5. Untrusted channels (MQTT / SoftAP) cannot modify apass or reset defaults
+    // 5. Mandatory apass length + untrusted channels (MQTT) cannot modify apass or reset defaults; atomic rollback
     ConfigManager cfg;
     cfg.resetDefaults();
+    assert(!cfg.hasAdminPassword());
+    assert(cfg.setParam("apass", "", true) == -1);     // Empty rejected
+    assert(cfg.setParam("apass", "abc", true) == -1);  // < 4 chars rejected
     assert(cfg.setParam("apass", "Admin123", true) == 1);
-    const char* mqttAttempt = "{\"apass\":\"\",\"srt\":22}";
-    assert(cfg.applyJsonConfig(mqttAttempt, std::strlen(mqttAttempt), false) == 1);
+    assert(cfg.hasAdminPassword());
+
+    // Atomic JSON rollback: forbidden key or invalid field rejects whole payload with zero partial writes
+    const char* mqttAttempt = "{\"apass\":\"NewPass\",\"srt\":22}";
+    assert(cfg.applyJsonConfig(mqttAttempt, std::strlen(mqttAttempt), false) == -1);
     assert(std::strcmp(cfg.data().adminPass, "Admin123") == 0); // Unchanged!
-    assert(cfg.data().sensorThreshold == 22);                   // Valid field still updated
+    assert(cfg.data().sensorThreshold == 15);                   // Rolled back!
+
+    const char* partialBadJson = "{\"nme\":\"Changed\",\"srt\":99}";
+    assert(cfg.applyJsonConfig(partialBadJson, std::strlen(partialBadJson), true) == -1);
+    assert(std::strcmp(cfg.data().deviceName, "Garage") == 0);  // Rolled back!
+
+    // Read-only keys from GET /api/config are cleanly ignored on re-import
+    const char* withReadOnly = "{\"ssid\":\"Net\",\"ip\":\"1.2.3.4\",\"mac\":\"AA:BB\",\"mqpwSet\":false,\"apassSet\":true,\"srt\":22}";
+    assert(cfg.applyJsonConfig(withReadOnly, std::strlen(withReadOnly), false) == 1);
+    assert(cfg.data().sensorThreshold == 22);
+
+    // Pipe config must validate & roll back atomically (prevents ipm=1 without sip/sgw corrupting EEPROM)
     assert(cfg.applyPipeConfig("defaults", false) == -1);
+    assert(cfg.applyPipeConfig("nme=Temp|ipm=1", true) == -1);
+    assert(cfg.data().ipMode == 0);
+    assert(std::strcmp(cfg.data().deviceName, "Garage") == 0);
+
+    // Full worst-case toJson() fits comfortably in 1152-byte buffer without truncation
+    {
+        ConfigManager maxCfg;
+        maxCfg.resetDefaults();
+        maxCfg.setParam("nme", "Very Long Double Garage Door 01");
+        maxCfg.setParam("tzo", "10043+10.00,10102+11.00");
+        maxCfg.setParam("ntp", "ntp-primary.internal.home.example.local.domain.test");
+        maxCfg.setParam("mqhost", "mqtt-broker-01.internal.home.example.local.domain.test");
+        maxCfg.setParam("mqus", "garadget_homeassistant_user");
+        maxCfg.setParam("hapfx", "homeassistant_custom_prefix");
+        maxCfg.applyJsonConfig("{\"ipm\":1,\"sip\":\"192.168.100.200\",\"smask\":\"255.255.255.0\",\"sgw\":\"192.168.100.254\",\"sdns\":\"192.168.100.253\"}", 107);
+        char bigJson[1152];
+        maxCfg.toJson(bigJson, sizeof(bigJson), "1234567890abcdef12345678", "3.3.1",
+                      "MySuperLongHomeWifiNetworkName32", "192.168.100.200", "AA:BB:CC:DD:EE:FF");
+        size_t jlen = std::strlen(bigJson);
+        assert(jlen < sizeof(bigJson) - 1);
+        assert(bigJson[jlen - 1] == '}');
+    }
 
     // 6. Static IP & DNS validation + atomic rollback on incomplete static IP config
     const char* badStatic = "{\"ipm\":1}"; // Missing sip/sgw -> must reject & roll back!

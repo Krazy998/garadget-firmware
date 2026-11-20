@@ -15,6 +15,8 @@ public:
     void tick(uint32_t nowMs);
 
     void enterSetupMode();
+    void exitSetupMode();
+    void touchSetupActivity();
     void clearCredentials();
 
     bool isReady() const;
@@ -30,9 +32,13 @@ public:
     void formatDeviceId(char* out, size_t outCap) const;
 
 private:
+    static constexpr uint32_t kSetupIdleTimeoutMs = 10UL * 60UL * 1000UL; // 10 minutes
+
     Timer reconnectTimer_;
+    Timer setupTimeoutTimer_;
     bool connecting_ = false;
     bool wasReady_ = false;
+    bool wasListening_ = false;
 };
 
 } // namespace garadget

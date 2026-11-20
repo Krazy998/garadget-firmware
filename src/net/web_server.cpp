@@ -107,7 +107,27 @@ void sendOtaError(TCPClient& client, int code, const char* statusText, const cha
     sendTextResponse(client, code, statusText, "application/json", msg, static_cast<size_t>(len));
 }
 
-void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen, size_t contentLen) {
+struct OtaLedGuard {
+    const DeviceConfig& cfg;
+    bool boosted = false;
+    void boost() {
+        RGB.brightness(128);
+        boosted = true;
+    }
+    void release() { boosted = false; }
+    ~OtaLedGuard() {
+        if (!boosted) return;
+        if (cfg.ledStealth) {
+            RGB.brightness(0);
+        } else {
+            uint8_t level = static_cast<uint8_t>((static_cast<uint16_t>(cfg.ledBrightness) * 255u) / 100u);
+            RGB.brightness(level);
+        }
+    }
+};
+
+void handleOtaUpload(TCPClient& client, const DeviceConfig& cfg,
+                     const char* reqHeaders, size_t headerLen, size_t contentLen) {
     if (contentLen < OtaValidator::kMinBinarySize || contentLen > OtaValidator::kMaxBinarySize) {
         Log.error("OTA: invalid Content-Length (%lu)", static_cast<unsigned long>(contentLen));
         sendOtaError(client, 400, "Bad Request", "invalid_size");
@@ -125,11 +145,12 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
     uint32_t otaStartMs = millis();
     uint8_t chunk[kChunkSize];
 
-    // Read first chunk (at least 24 bytes) with tight 2s timeout and validate P1 header BEFORE touching flash
+    // Read full first chunk with tight 2s idle timeout and validate P1 header BEFORE touching flash
     size_t firstWant = (contentLen < kChunkSize) ? contentLen : kChunkSize;
     size_t firstRead = readStreamBytes(client, chunk, firstWant, 2000);
-    if (firstRead < 24) {
-        Log.error("OTA: truncated header read (%u bytes)", static_cast<unsigned>(firstRead));
+    if (firstRead != firstWant || firstRead < 24) {
+        Log.error("OTA: truncated header read (%u/%u bytes)",
+                  static_cast<unsigned>(firstRead), static_cast<unsigned>(firstWant));
         sendOtaError(client, 400, "Bad Request", "truncated_upload");
         return;
     }
@@ -140,6 +161,10 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
         sendOtaError(client, 400, "Bad Request", hdrErr);
         return;
     }
+
+    // Temporarily restore LED visibility during OTA even if Stealth Mode is active
+    OtaLedGuard ledGuard{cfg, false};
+    ledGuard.boost();
 
     // Prepare Device OS OTA staging slot in flash
     FileTransfer::Descriptor desc;
@@ -159,7 +184,7 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
     OtaValidator validator;
     validator.reset(contentLen);
 
-    // Save first chunk
+    // Save first chunk (guaranteed 512B aligned unless total binary < 512B)
     size_t written = 0;
     desc.chunk_address = desc.file_address;
     desc.chunk_size = static_cast<uint16_t>(firstRead);
@@ -172,7 +197,7 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
     validator.feed(chunk, firstRead);
     written += firstRead;
 
-    // Stream remaining chunks with per-chunk (5s) and total (30s) caps
+    // Stream remaining chunks; enforce exact full reads so flash writes stay 4-byte word aligned
     while (written < contentLen) {
         if (static_cast<uint32_t>(millis() - otaStartMs) >= kTotalOtaTimeoutMs) {
             Log.error("OTA: total upload timeout exceeded");
@@ -183,9 +208,10 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
         size_t want = contentLen - written;
         if (want > kChunkSize) want = kChunkSize;
         size_t got = readStreamBytes(client, chunk, want, 5000);
-        if (got == 0) {
-            Log.error("OTA: stream stalled at %lu/%lu bytes",
-                      static_cast<unsigned long>(written), static_cast<unsigned long>(contentLen));
+        if (got != want) {
+            Log.error("OTA: stream truncated/stalled at %lu/%lu bytes (got %u/%u)",
+                      static_cast<unsigned long>(written), static_cast<unsigned long>(contentLen),
+                      static_cast<unsigned>(got), static_cast<unsigned>(want));
             Spark_Finish_Firmware_Update(desc, 0 /* CANCEL */, nullptr);
             sendOtaError(client, 400, "Bad Request", "upload_timeout");
             return;
@@ -223,6 +249,7 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
         return;
     }
 
+    ledGuard.release();
     Log.info("OTA: firmware verified & staged (%lu bytes), rebooting to apply!",
              static_cast<unsigned long>(written));
     char okMsg[96];
@@ -239,6 +266,17 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen
     }
     System.enableReset();
     System.reset();
+}
+
+bool isKnownSystemAction(const char* action) {
+    if (!action || action[0] == '\0') return false;
+    return std::strcmp(action, "scan") == 0 ||
+           std::strcmp(action, "sync-time") == 0 ||
+           std::strcmp(action, "ha-rediscover") == 0 ||
+           std::strcmp(action, "wifi-setup") == 0 ||
+           std::strcmp(action, "clear-wifi") == 0 ||
+           std::strcmp(action, "reboot") == 0 ||
+           std::strcmp(action, "factory-reset") == 0;
 }
 
 } // namespace
@@ -282,13 +320,15 @@ void WebServer::tick(uint32_t nowMs) {
         return;
     }
 
-    // Read request headers (and small JSON bodies) with strict non-blocking budget
-    static char reqBuf[1536];
+    // Read request headers (and JSON bodies up to 1280B) with strict non-blocking budget
+    static constexpr size_t kMaxJsonBody = 1280;
+    static char reqBuf[2560];
     size_t reqLen = 0;
     size_t headerEnd = 0;
     size_t contentLen = 0;
     bool isOtaStream = false;
-    uint32_t deadline = millis() + 250u;
+    bool payloadTooLarge = false;
+    uint32_t deadline = millis() + 300u;
 
     while (client.connected() && static_cast<int32_t>(deadline - millis()) > 0) {
         while (client.available() > 0 && reqLen + 1 < sizeof(reqBuf)) {
@@ -311,16 +351,42 @@ void WebServer::tick(uint32_t nowMs) {
                     isOtaStream = true;
                     break;
                 }
-                if (contentLen > 1024) contentLen = 1024;
+                if (contentLen > kMaxJsonBody || headerEnd + contentLen >= sizeof(reqBuf)) {
+                    payloadTooLarge = true;
+                    break;
+                }
             }
         }
-        if (isOtaStream || (headerEnd > 0 && reqLen >= headerEnd + contentLen)) {
+        if (isOtaStream || payloadTooLarge ||
+            (headerEnd > 0 && reqLen >= headerEnd + contentLen) ||
+            (headerEnd == 0 && reqLen + 1 >= sizeof(reqBuf))) {
             break;
         }
         delay(1);
     }
 
     if (reqLen == 0) {
+        client.stop();
+        return;
+    }
+
+    if (headerEnd == 0) {
+        if (reqLen + 1 >= sizeof(reqBuf)) {
+            const char* err = "{\"ok\":false,\"error\":\"headers_too_large\"}";
+            sendTextResponse(client, 431, "Request Header Fields Too Large", "application/json", err, std::strlen(err));
+        } else {
+            const char* err = "{\"ok\":false,\"error\":\"malformed_request\"}";
+            sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
+        }
+        client.flush();
+        client.stop();
+        return;
+    }
+
+    if (payloadTooLarge) {
+        const char* err = "{\"ok\":false,\"error\":\"payload_too_large\"}";
+        sendTextResponse(client, 413, "Payload Too Large", "application/json", err, std::strlen(err));
+        client.flush();
         client.stop();
         return;
     }
@@ -374,9 +440,55 @@ void WebServer::tick(uint32_t nowMs) {
         return;
     }
 
-    // API endpoints require constant-time auth + brute-force lockout when adminPass is configured
-    if (std::strncmp(path, "/api/", 5) == 0 && config_.data().adminPass[0] != '\0') {
-        if (gAuthLimiter.isLockedOut(nowMs)) {
+    // Mandatory first-time Web Admin Password setup endpoint (only allowed while no password is set)
+    if (std::strcmp(method, "POST") == 0 && std::strcmp(path, "/api/setup-password") == 0) {
+        if (config_.hasAdminPassword()) {
+            const char* err = "{\"ok\":false,\"error\":\"already_configured\"}";
+            sendTextResponse(client, 403, "Forbidden", "application/json", err, std::strlen(err));
+        } else {
+            struct PwCtx {
+                char pass[kAdminPassCap] = {};
+            } ctx;
+            auto cb = [](const char* k, const char* v, bool, void* u) -> bool {
+                if (std::strcmp(k, "apass") == 0) {
+                    auto* c = static_cast<PwCtx*>(u);
+                    std::strncpy(c->pass, v, sizeof(c->pass) - 1);
+                }
+                return true;
+            };
+            bool okJson = parseFlatJsonObject(body, bodyLen, cb, &ctx);
+            int res = okJson ? config_.setParam("apass", ctx.pass, true) : -1;
+            if (res > 0) {
+                config_.save(storage_);
+                alerts_.onConfigUpdated(nowMs);
+                if (onConfigSaved_) onConfigSaved_(hookCtx_);
+                const char* ok = "{\"ok\":true}";
+                sendTextResponse(client, 200, "OK", "application/json", ok, std::strlen(ok));
+            } else {
+                const char* err = "{\"ok\":false,\"error\":\"password_too_short\"}";
+                sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
+            }
+        }
+        client.flush();
+        client.stop();
+        return;
+    }
+
+    // All API endpoints require an admin password to be configured first, then constant-time auth + per-IP lockout
+    if (std::strncmp(path, "/api/", 5) == 0) {
+        if (!config_.hasAdminPassword()) {
+            const char* err = "{\"ok\":false,\"error\":\"password_setup_required\"}";
+            sendTextResponse(client, 428, "Precondition Required", "application/json", err, std::strlen(err));
+            client.flush();
+            client.stop();
+            return;
+        }
+        IPAddress rip = client.remoteIP();
+        uint32_t clientIp = (static_cast<uint32_t>(rip[0]) << 24) |
+                            (static_cast<uint32_t>(rip[1]) << 16) |
+                            (static_cast<uint32_t>(rip[2]) << 8) |
+                            static_cast<uint32_t>(rip[3]);
+        if (gAuthLimiter.isLockedOut(nowMs, clientIp)) {
             const char* err = "{\"ok\":false,\"error\":\"rate_limited\"}";
             sendTextResponse(client, 429, "Too Many Requests", "application/json", err, std::strlen(err));
             client.flush();
@@ -384,19 +496,19 @@ void WebServer::tick(uint32_t nowMs) {
             return;
         }
         if (!verifyAuthToken(reqBuf, hdrLen, config_.data().adminPass)) {
-            gAuthLimiter.recordFailure(nowMs);
+            gAuthLimiter.recordFailure(nowMs, clientIp);
             const char* err = "{\"ok\":false,\"error\":\"unauthorized\"}";
             sendTextResponse(client, 401, "Unauthorized", "application/json", err, std::strlen(err));
             client.flush();
             client.stop();
             return;
         }
-        gAuthLimiter.recordSuccess();
+        gAuthLimiter.recordSuccess(clientIp);
     }
 
     // Streaming binary OTA firmware upload
     if (std::strcmp(method, "POST") == 0 && std::strcmp(path, "/api/ota") == 0) {
-        handleOtaUpload(client, reqBuf, hdrLen, contentLen);
+        handleOtaUpload(client, config_.data(), reqBuf, hdrLen, contentLen);
         client.flush();
         client.stop();
         return;
@@ -523,11 +635,18 @@ void WebServer::tick(uint32_t nowMs) {
             return true;
         };
         parseFlatJsonObject(body, bodyLen, cb, &ctx);
+        if (!isKnownSystemAction(ctx.action)) {
+            const char* err = "{\"ok\":false,\"error\":\"unknown_action\"}";
+            sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
+            client.flush();
+            client.stop();
+            return;
+        }
         const char* ok = "{\"ok\":true}";
         sendTextResponse(client, 200, "OK", "application/json", ok, std::strlen(ok));
         client.flush();
         client.stop();
-        if (ctx.action[0] != '\0' && onSystemAction_) {
+        if (onSystemAction_) {
             onSystemAction_(ctx.action, hookCtx_);
         }
         return;

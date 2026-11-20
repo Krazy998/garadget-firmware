@@ -28,6 +28,9 @@ void softapPageHandler(const char* url,
                        Writer* response,
                        void* /*reserved*/) {
     if (!url || !cb || !response) return;
+    if (gSoftApWifi) {
+        gSoftApWifi->touchSetupActivity();
+    }
 
     if (std::strcmp(url, "/index") == 0 || std::strcmp(url, "/") == 0) {
         Header h("Location: /index.html\r\n");
@@ -56,7 +59,7 @@ void softapPageHandler(const char* url,
     }
 
     if (std::strcmp(url, "/load-config") == 0 && gSoftApConfig && gSoftApWifi) {
-        char buf[768];
+        char buf[1152];
         char id[32], ssid[40], ip[20], mac[24];
         gSoftApWifi->formatDeviceId(id, sizeof(id));
         gSoftApWifi->formatSsid(ssid, sizeof(ssid));
@@ -71,8 +74,19 @@ void softapPageHandler(const char* url,
 
     if (std::strcmp(url, "/clear-wifi") == 0 && gSoftApWifi) {
         gSoftApWifi->clearCredentials();
+        if (gSoftApConfig && gSoftApStorage && gSoftApConfig->data().ipMode != 0) {
+            gSoftApConfig->mutableData().ipMode = 0;
+            gSoftApConfig->save(*gSoftApStorage);
+        }
         cb(cbArg, 0, 200, "application/json", nullptr);
         response->write("{\"r\":0}");
+        return;
+    }
+
+    if (std::strcmp(url, "/exit-setup") == 0 && gSoftApWifi) {
+        cb(cbArg, 0, 200, "application/json", nullptr);
+        response->write("{\"r\":0}");
+        gSoftApWifi->exitSetupMode();
         return;
     }
 
@@ -81,7 +95,8 @@ void softapPageHandler(const char* url,
         if (request->bytes_left > 0 && request->bytes_left <= 1024) {
             char* body = request->fetch_as_string();
             if (body) {
-                rc = gSoftApConfig->applyJsonConfig(body, std::strlen(body), false /* allowAdminPass */);
+                // Physical/local SoftAP setup is the sanctioned channel for initial Web Admin Password setup & reset
+                rc = gSoftApConfig->applyJsonConfig(body, std::strlen(body), true /* allowAdminPass */);
                 if (rc >= 0) {
                     gSoftApConfig->save(*gSoftApStorage);
                     if (gSoftApWifi) {

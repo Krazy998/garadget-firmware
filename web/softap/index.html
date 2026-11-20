@@ -57,9 +57,18 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334
     </div>
   </div>
 
+  <h2>Web Admin Password</h2>
+  <p class="sub" id="apassHint" style="margin-bottom:8px">Required: set a password (min 4 characters) to protect the LAN Web UI &amp; OTA updates.</p>
+  <div class="row">
+    <div class="f" style="flex:1"><label>Web Admin Password</label><input id="adminPass" type="password" maxlength="31" placeholder="Minimum 4 characters"></div>
+    <div class="f" style="flex:1"><label>Confirm Password</label><input id="adminPass2" type="password" maxlength="31" placeholder="Re-enter password"></div>
+  </div>
+  <button class="btn btn-s" id="resetPwBtn" style="display:none;width:100%;margin-bottom:6px" onclick="resetPasswordOnly()">Reset Admin Password Only (Keep Current Wi-Fi)</button>
+
   <h2>Device &amp; MQTT (Optional)</h2>
   <div class="f"><label>Device Name</label><input id="nme" type="text" value="Garage"></div>
-  <div class="f"><label>MQTT Broker Host/IP (leave blank to configure later on LAN)</label><input id="mqhost" type="text" placeholder="192.168.1.10"></div>
+  <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:#cbd5e1;margin:4px 0 8px;cursor:pointer"><input id="mqttOn" type="checkbox" style="width:auto"> Enable MQTT</label>
+  <div class="f"><label>MQTT Broker Host/IP (leave blank to configure later on LAN)</label><input id="mqhost" type="text" placeholder="192.168.1.10" oninput="if(this.value.trim())$('mqttOn').checked=true"></div>
   <div class="row">
     <div class="f" style="flex:1"><label>MQTT Port</label><input id="mqpt" type="number" value="1883"></div>
     <div class="f" style="flex:1"><label>MQTT User</label><input id="mqus" type="text"></div>
@@ -72,7 +81,7 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let scans=[],rsa=new RSAKey(),keyReady=false;
+let scans=[],rsa=new RSAKey(),keyReady=false,apassSet=false;
 const secNames={0:'Open',1:'WEP',32769:'WEP',2097154:'WPA',2097156:'WPA',4194306:'WPA2',4194308:'WPA2',4194310:'WPA2'};
 function showMsg(t,err){const m=$('msg');m.textContent=t;m.className='msg '+(err?'err':'ok');}
 function req(m,u,d,cb){
@@ -134,7 +143,15 @@ function loadCfg(){
   req('GET','load-config',null,(err,c)=>{
     if(err||!c)return;
     $('devInfo').textContent=`ID: ${c.id} · v${c.ver} · OS ${c.sys}`;
+    apassSet=!!c.apassSet;
+    if(apassSet){
+      $('apassHint').textContent='Web Admin Password is already set. Enter a new password below to reset it, or leave blank to keep existing.';
+      $('adminPass').placeholder='Leave blank to keep existing';
+      $('adminPass2').placeholder='Confirm new password';
+      if(c.ssid)$('resetPwBtn').style.display='';
+    }
     if(c.nme)$('nme').value=c.nme;
+    $('mqttOn').checked=!!c.mqtt;
     if(c.mqhost)$('mqhost').value=c.mqhost;
     if(c.mqpt)$('mqpt').value=c.mqpt;
     if(c.mqus)$('mqus').value=c.mqus;
@@ -148,8 +165,24 @@ function loadCfg(){
     }
   });
 }
+function resetPasswordOnly(){
+  const ap1=$('adminPass').value,ap2=$('adminPass2').value;
+  if(ap1.length<4){showMsg('Enter a new Web Admin Password (at least 4 characters)',true);return;}
+  if(ap1!==ap2){showMsg('Web Admin Passwords do not match',true);return;}
+  $('resetPwBtn').disabled=true;$('saveBtn').disabled=true;
+  showMsg('Updating Web Admin Password...');
+  req('POST','save-config',{apass:ap1},(e,r)=>{
+    if(e||!r||r.r!==0){$('resetPwBtn').disabled=false;$('saveBtn').disabled=false;showMsg('Failed updating password ('+(e||('code '+r.r))+')',true);return;}
+    showMsg('Web Admin Password reset! Reconnecting to your saved Wi-Fi...');
+    req('POST','exit-setup',{},()=>{});
+  });
+}
 function submitSetup(){
   if(!keyReady)return;
+  const ap1=$('adminPass').value,ap2=$('adminPass2').value;
+  if(!apassSet&&ap1.length<4){showMsg('Please set a Web Admin Password (at least 4 characters)',true);return;}
+  if(ap1.length>0&&ap1.length<4){showMsg('Web Admin Password must be at least 4 characters',true);return;}
+  if(ap1!==ap2){showMsg('Web Admin Passwords do not match',true);return;}
   const sel=document.querySelector('input[name=ap]:checked');
   const idx=sel?Number(sel.value):-1;
   let ap={idx:0};
@@ -172,7 +205,8 @@ function submitSetup(){
     req('POST','configure-ap',ap,(e1,r1)=>{
       if(e1||!r1||r1.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving Wi-Fi credentials ('+(e1||('code '+r1.r))+')',true);return;}
       const host=$('mqhost').value.trim();
-      const cfg={nme:$('nme').value.trim()||'Garage',mqtt:host?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim(),ipm:$('useStatic').checked?1:0};
+      const cfg={nme:$('nme').value.trim()||'Garage',mqtt:($('mqttOn').checked&&host)?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim(),ipm:$('useStatic').checked?1:0};
+      if(ap1.length>=4)cfg.apass=ap1;
       if($('mqpw').value)cfg.mqpw=$('mqpw').value;
       if($('useStatic').checked){
         cfg.sip=$('sip').value.trim();cfg.smask=$('smask').value.trim()||'255.255.255.0';

@@ -7,7 +7,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-and-test:
@@ -44,6 +44,7 @@ jobs:
           crc_calc = zlib.crc32(data[:-4]) & 0xFFFFFFFF
           assert start == 0x080A0000, f"bad start 0x{start:x}"
           assert end <= 0x080C0000, f"binary exceeds 128KB slot: 0x{end:x}"
+          assert (end - start) + 4 == len(data), f"length mismatch: 0x{end-start:x}+4 vs {len(data)}"
           assert plat == 8, f"expected P1 platform 8, got {plat}"
           assert fn == 5, f"expected user-part 5, got {fn}"
           assert crc_stored == crc_calc, "CRC32 mismatch"
@@ -59,8 +60,33 @@ jobs:
             target/garadget.elf
             target/garadget.hex
 
-      - name: Extract release notes from CHANGELOG.md
+      - name: Upload OS binaries for release
         if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: garadget-p1-os-bins
+          path: |
+            .toolchain/device-os-bins/3.3.1/p1-bootloader@3.3.1+lto.bin
+            .toolchain/device-os-bins/3.3.1/p1-system-part1@3.3.1.bin
+            .toolchain/device-os-bins/3.3.1/p1-system-part2@3.3.1.bin
+
+  release:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Extract release notes from CHANGELOG.md
         run: |
           python3 - <<'EOF'
           import os, re
@@ -74,13 +100,12 @@ jobs:
           EOF
 
       - name: Publish GitHub Release on tag
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           body_path: /tmp/release_notes.md
           generate_release_notes: true
           files: |
-            target/garadget.bin
-            .toolchain/device-os-bins/3.3.1/p1-bootloader@3.3.1+lto.bin
-            .toolchain/device-os-bins/3.3.1/p1-system-part1@3.3.1.bin
-            .toolchain/device-os-bins/3.3.1/p1-system-part2@3.3.1.bin
+            release-assets/garadget.bin
+            release-assets/p1-bootloader@3.3.1+lto.bin
+            release-assets/p1-system-part1@3.3.1.bin
+            release-assets/p1-system-part2@3.3.1.bin

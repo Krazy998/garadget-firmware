@@ -146,43 +146,113 @@ inline bool verifyCsrfProtection(const char* headers, size_t headerLen,
     return startsWithCi(ct, ctLen, "application/json");
 }
 
-// Brute-force rate limiter for Web UI authentication (locks out for 10s after 5 consecutive failures).
+// Per-IP brute-force rate limiter for Web UI authentication (locks out an IP for 10s after 5 consecutive failures).
 class AuthRateLimiter {
 public:
     static constexpr uint8_t  kMaxFailures = 5;
     static constexpr uint32_t kLockoutMs   = 10000u;
+    static constexpr size_t   kMaxSlots    = 4;
 
-    bool isLockedOut(uint32_t nowMs) {
-        if (!locked_) return false;
-        if (static_cast<uint32_t>(nowMs - lockStartMs_) >= kLockoutMs) {
-            locked_ = false;
-            failures_ = 0;
+    bool isLockedOut(uint32_t nowMs, uint32_t clientIp = 0) {
+        Slot* s = findSlot(clientIp);
+        if (!s || !s->locked) return false;
+        if (static_cast<uint32_t>(nowMs - s->lockStartMs) >= kLockoutMs) {
+            s->locked = false;
+            s->failures = 0;
             return false;
         }
         return true;
     }
 
-    void recordFailure(uint32_t nowMs) {
-        if (failures_ < kMaxFailures) {
-            failures_++;
+    void recordFailure(uint32_t nowMs, uint32_t clientIp = 0) {
+        Slot* s = findOrAllocSlot(clientIp, nowMs);
+        s->lastSeenMs = nowMs;
+        if (s->failures < kMaxFailures) {
+            s->failures++;
         }
-        if (failures_ >= kMaxFailures) {
-            locked_ = true;
-            lockStartMs_ = nowMs;
+        if (s->failures >= kMaxFailures) {
+            s->locked = true;
+            s->lockStartMs = nowMs;
         }
     }
 
-    void recordSuccess() {
-        failures_ = 0;
-        locked_ = false;
+    void recordSuccess(uint32_t clientIp = 0) {
+        Slot* s = findSlot(clientIp);
+        if (s) {
+            s->failures = 0;
+            s->locked = false;
+        }
     }
 
-    uint8_t failures() const { return failures_; }
+    uint8_t failures(uint32_t clientIp = 0) const {
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].ip == clientIp) {
+                return slots_[i].failures;
+            }
+        }
+        return 0;
+    }
 
 private:
-    uint8_t failures_ = 0;
-    bool locked_ = false;
-    uint32_t lockStartMs_ = 0;
+    struct Slot {
+        uint32_t ip = 0;
+        uint32_t lockStartMs = 0;
+        uint32_t lastSeenMs = 0;
+        uint8_t failures = 0;
+        bool locked = false;
+        bool used = false;
+    };
+
+    Slot* findSlot(uint32_t ip) {
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].ip == ip) {
+                return &slots_[i];
+            }
+        }
+        return nullptr;
+    }
+
+    Slot* findOrAllocSlot(uint32_t ip, uint32_t nowMs) {
+        if (Slot* existing = findSlot(ip)) {
+            return existing;
+        }
+        // Expire any stale lockouts first
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].locked &&
+                static_cast<uint32_t>(nowMs - slots_[i].lockStartMs) >= kLockoutMs) {
+                slots_[i].locked = false;
+                slots_[i].failures = 0;
+            }
+        }
+        // Prefer an unused slot or an unlocked zero-failure slot
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (!slots_[i].used || (!slots_[i].locked && slots_[i].failures == 0)) {
+                slots_[i] = Slot{ip, 0, nowMs, 0, false, true};
+                return &slots_[i];
+            }
+        }
+        // Evict the oldest slot (preferring unlocked slots over actively locked ones)
+        size_t victim = 0;
+        bool foundUnlocked = false;
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (!slots_[i].locked) {
+                if (!foundUnlocked ||
+                    static_cast<uint32_t>(nowMs - slots_[i].lastSeenMs) >
+                        static_cast<uint32_t>(nowMs - slots_[victim].lastSeenMs)) {
+                    victim = i;
+                    foundUnlocked = true;
+                }
+            } else if (!foundUnlocked &&
+                       static_cast<uint32_t>(nowMs - slots_[i].lastSeenMs) >
+                           static_cast<uint32_t>(nowMs - slots_[victim].lastSeenMs)) {
+                victim = i;
+            }
+        }
+        slots_[victim] = Slot{ip, 0, nowMs, 0, false, true};
+        return &slots_[victim];
+    }
+
+    Slot slots_[kMaxSlots]{};
 };
 
 } // namespace garadget

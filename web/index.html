@@ -68,8 +68,8 @@ nav button.active{color:#fff;background:var(--accent)}
 .alerts-list li{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:.84rem;display:flex;justify-content:space-between;gap:8px}
 .code-box{background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem;color:var(--muted);overflow-x:auto}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--fg);border:1px solid var(--border);padding:10px 18px;border-radius:999px;font-size:.88rem;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,.35);display:none;z-index:99}
-#authModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
-#authModal .card{max-width:360px;width:100%;margin:0}
+#authModal,#setupModal{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
+#authModal .card,#setupModal .card{max-width:380px;width:100%;margin:0}
 </style>
 </head>
 <body>
@@ -77,7 +77,7 @@ nav button.active{color:#fff;background:var(--accent)}
   <header>
     <div class="brand">
       <svg viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#16a34a"/><path d="M12 26L32 13L52 26V50H46V31H18V50H12V26Z" fill="#fff"/><rect x="21" y="34" width="22" height="4" rx="1.5" fill="#bbf7d0"/><rect x="21" y="40" width="22" height="4" rx="1.5" fill="#bbf7d0"/><rect x="21" y="46" width="22" height="4" rx="1.5" fill="#bbf7d0"/></svg>
-      <div><h1 id="hdrName">Garadget</h1><small id="hdrSub">Local Controller v3.0</small></div>
+      <div><h1 id="hdrName">Garadget</h1><small id="hdrSub">Local Controller</small></div>
     </div>
     <div class="pills">
       <span class="pill"><span class="dot" id="dotWifi"></span><span id="pillWifi">Wi-Fi</span></span>
@@ -272,9 +272,13 @@ nav button.active{color:#fff;background:var(--accent)}
       </div>
     </div>
     <div class="card">
-      <h2>Web UI Security (Optional)</h2>
-      <div class="field"><label>Admin Password</label><input type="password" id="cfg-apass" placeholder="Leave blank for open LAN access"><small id="apassHint">Currently no password set</small></div>
-      <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button><button class="btn btn-ghost" onclick="clearAdminPass()">Remove Password</button></div>
+      <h2>Web UI Security</h2>
+      <div class="grid">
+        <div class="field"><label>New Admin Password</label><input type="password" id="cfg-apass" maxlength="31" placeholder="Minimum 4 characters"></div>
+        <div class="field"><label>Confirm New Password</label><input type="password" id="cfg-apass2" maxlength="31" placeholder="Re-enter new password"></div>
+      </div>
+      <div class="field"><small id="apassHint">Password protection is required. If forgotten, hold the physical M button for 3s to enter Wi-Fi Setup Mode (192.168.0.1) to reset it.</small></div>
+      <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button></div>
     </div>
     <div class="card">
       <h2>Firmware Update (Local OTA)</h2>
@@ -306,8 +310,17 @@ nav button.active{color:#fff;background:var(--accent)}
 <div id="authModal">
   <div class="card">
     <h2>Authentication Required</h2>
-    <div class="field"><label>Admin Password</label><input type="password" id="loginPass" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="field"><label>Admin Password</label><input type="password" id="loginPass" onkeydown="if(event.key==='Enter')doLogin()"><small>Forgot password? Hold the physical M button for 3s to enter Wi-Fi Setup Mode (192.168.0.1) and reset it.</small></div>
     <button class="btn" style="width:100%" onclick="doLogin()">Unlock</button>
+  </div>
+</div>
+<div id="setupModal">
+  <div class="card">
+    <h2>Set Web Admin Password</h2>
+    <p style="font-size:.86rem;color:var(--muted);margin-bottom:12px">First-time setup requires a Web Admin Password (minimum 4 characters) to protect door controls, settings, and OTA updates.</p>
+    <div class="field"><label>New Admin Password</label><input type="password" id="setupPass1" maxlength="31" placeholder="Minimum 4 characters"></div>
+    <div class="field"><label>Confirm Password</label><input type="password" id="setupPass2" maxlength="31" placeholder="Re-enter password" onkeydown="if(event.key==='Enter')doSetupPassword()"></div>
+    <button class="btn" style="width:100%" id="setupBtn" onclick="doSetupPassword()">Set Password &amp; Continue</button>
   </div>
 </div>
 <div id="toast"></div>
@@ -341,7 +354,9 @@ async function api(path,method='GET',body=null){
   if(body!==null)h['Content-Type']='application/json';
   if(authToken)h['X-Auth-Token']=authToken;
   const r=await fetch(path,{method,headers:h,body:body!==null?JSON.stringify(body):undefined});
-  if(r.status===401){$('authModal').style.display='flex';throw new Error('Unauthorized');}
+  if(r.status===428){$('authModal').style.display='none';$('setupModal').style.display='flex';throw new Error('Password setup required');}
+  if(r.status===401){$('setupModal').style.display='none';$('authModal').style.display='flex';throw new Error('Unauthorized');}
+  if(r.status===429){toast('Too many failed attempts — wait 10s',true);throw new Error('Rate limited');}
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.json();
 }
@@ -349,6 +364,23 @@ async function api(path,method='GET',body=null){
 function doLogin(){
   authToken=$('loginPass').value;sessionStorage.setItem('g_auth',authToken);
   $('authModal').style.display='none';loadAll();
+}
+
+async function doSetupPassword(){
+  const p1=$('setupPass1').value,p2=$('setupPass2').value;
+  if(p1.length<4){toast('Password must be at least 4 characters',true);return;}
+  if(p1!==p2){toast('Passwords do not match',true);return;}
+  const btn=$('setupBtn');btn.disabled=true;
+  try{
+    const r=await fetch('/api/setup-password',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({apass:p1})});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    authToken=p1;sessionStorage.setItem('g_auth',p1);
+    $('setupPass1').value='';$('setupPass2').value='';
+    $('setupModal').style.display='none';
+    toast('Admin password set!');
+    await loadAll();
+  }catch(e){toast('Failed to set password — check value',true);}
+  finally{btn.disabled=false;}
 }
 
 function minToTime(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');}
@@ -364,6 +396,7 @@ function updateDoorGraphic(st){
 }
 
 async function pollStatus(){
+  if($('authModal').style.display==='flex'||$('setupModal').style.display==='flex')return;
   try{
     const s=await api('/api/status');
     updateDoorGraphic(s.status);
@@ -416,7 +449,7 @@ async function loadConfig(){
     $('cfg-mqpw').placeholder=c.mqpwSet?'(password saved — leave blank to keep)':'Optional MQTT password';
     $('cfg-mqto').value=c.mqto||15;
     $('cfg-hapfx').value=c.hapfx||'homeassistant';
-    const tid=(c.nme||'garadget').replace(/[^a-zA-Z0-9_-]/g,'_');
+    const tid=(c.nme||'').replace(/ /g,'_').replace(/[^a-zA-Z0-9_-]/g,'')||'garadget';
     $('mqttTopics').textContent=`Topics: garadget/${tid}/{status,command,set-config,alert,LWT}`;
     $('cfg-aot').value=c.aot||0;
     $('cfg-ans').value=minToTime(c.ans||0);
@@ -424,7 +457,7 @@ async function loadConfig(){
     $('cfg-tzo').value=c.tzo||'0';
     $('cfg-ntp').value=c.ntp||'pool.ntp.org';
     document.querySelectorAll('#aevChecks input').forEach(ch=>{ch.checked=!!((c.aev||0)&(1<<Number(ch.dataset.bit)));});
-    $('apassHint').textContent=c.apassSet?'Password protection is ENABLED':'Currently open on local LAN (no password)';
+    $('apassHint').textContent='Password protection is ENABLED. Forgot it? Hold the M button for 3s to enter Wi-Fi Setup Mode (192.168.0.1) to reset it.';
     $('cfg-ipm').value=String(c.ipm||0);
     $('cfg-sip').value=c.sip||'';
     $('cfg-smask').value=c.smask||'255.255.255.0';
@@ -521,11 +554,18 @@ function saveAlertCfg(){
   });
 }
 
-function saveAdminPass(){
-  const pw=$('cfg-apass').value;if(!pw){toast('Enter a password first',true);return;}
-  saveCfg({apass:pw});authToken=pw;sessionStorage.setItem('g_auth',pw);$('cfg-apass').value='';
+async function saveAdminPass(){
+  const pw=$('cfg-apass').value,pw2=$('cfg-apass2').value;
+  if(pw.length<4){toast('Password must be at least 4 characters',true);return;}
+  if(pw!==pw2){toast('Passwords do not match',true);return;}
+  try{
+    await api('/api/config','POST',{apass:pw});
+    authToken=pw;sessionStorage.setItem('g_auth',pw);
+    $('cfg-apass').value='';$('cfg-apass2').value='';
+    toast('Admin password updated');
+    await loadConfig();
+  }catch(e){toast('Failed to update password',true);}
 }
-function clearAdminPass(){saveCfg({apass:''});authToken='';sessionStorage.removeItem('g_auth');}
 
 async function sysAction(action){
   try{await api('/api/system','POST',{action});toast('Executed: '+action);if(action==='scan')setTimeout(pollStatus,250);}
@@ -557,6 +597,7 @@ function uploadOta(){
     }
   };
   xhr.onload=()=>{
+    if(xhr.status===428){$('setupModal').style.display='flex';btn.disabled=false;return;}
     if(xhr.status===401){$('authModal').style.display='flex';btn.disabled=false;return;}
     let res={};try{res=JSON.parse(xhr.responseText);}catch(e){}
     if(xhr.status===200&&res.ok){

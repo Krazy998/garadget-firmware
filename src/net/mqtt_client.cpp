@@ -86,9 +86,7 @@ void MqttClient::resetRx() {
 #ifdef PARTICLE
 
 void MqttClient::closeTransport() {
-    if (gMqttTcp.connected()) {
-        gMqttTcp.stop();
-    }
+    gMqttTcp.stop();
     state_ = State::Disconnected;
     activityTimer_.stop();
     responseTimer_.stop();
@@ -113,6 +111,10 @@ bool MqttClient::sendPacket(uint8_t fixedHeader, const uint8_t* body, size_t bod
             closeTransport();
             return false;
         }
+    }
+    if (state_ == State::Connected) {
+        // Send PINGREQ at 75% of keepalive interval to stay well ahead of 1.5x broker timeouts
+        activityTimer_.start(millis(), static_cast<uint32_t>(keepAliveSec_) * 750u);
     }
     return true;
 }
@@ -370,7 +372,7 @@ void MqttClient::handlePacket(uint32_t nowMs) {
                 Log.info("MQTT: connected (CONNACK accepted)");
                 state_ = State::Connected;
                 responseTimer_.stop();
-                activityTimer_.start(nowMs, static_cast<uint32_t>(keepAliveSec_) * 1000u);
+                activityTimer_.start(nowMs, static_cast<uint32_t>(keepAliveSec_) * 750u);
                 if (onConnect_) {
                     onConnect_(cbCtx_);
                 }
@@ -385,8 +387,8 @@ void MqttClient::handlePacket(uint32_t nowMs) {
         return;
     }
 
-    // Any valid packet refreshes keepalive window
-    activityTimer_.start(nowMs, static_cast<uint32_t>(keepAliveSec_) * 1000u);
+    // Any valid packet refreshes keepalive window (75% of keepAliveSec)
+    activityTimer_.start(nowMs, static_cast<uint32_t>(keepAliveSec_) * 750u);
 
     switch (type) {
         case kPktPublish:

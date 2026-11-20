@@ -15,6 +15,7 @@ void AlertEngine::onInit(DoorStatus initialStatus, uint32_t nowMs) {
     }
     if (initialStatus != DoorStatus::Closed && initialStatus != DoorStatus::Unknown) {
         openedAtMs_ = nowMs;
+        activeTimeoutSec_ = cfg_.alertOpenTimeout;
         if (cfg_.alertOpenTimeout > 0) {
             openTimeoutTimer_.start(nowMs, static_cast<uint32_t>(cfg_.alertOpenTimeout) * 1000u);
         }
@@ -34,12 +35,14 @@ void AlertEngine::onStatusChange(DoorStatus newStatus, uint32_t nowMs) {
         case DoorStatus::Stopped:
             if (cfg_.alertOpenTimeout > 0 && !openTimeoutTimer_.isRunning() && !timeoutFired_) {
                 openedAtMs_ = nowMs;
+                activeTimeoutSec_ = cfg_.alertOpenTimeout;
                 openTimeoutTimer_.start(nowMs, static_cast<uint32_t>(cfg_.alertOpenTimeout) * 1000u);
             }
             break;
 
         case DoorStatus::Closed:
             openTimeoutTimer_.stop();
+            activeTimeoutSec_ = 0;
             timeoutFired_ = false;
             nightFired_ = false;
             break;
@@ -72,12 +75,19 @@ void AlertEngine::tick(DoorStatus currentStatus, uint32_t nowMs, bool timeValid,
         return;
     }
 
-    // If user enabled timeout while door was already open, start timer cleanly
+    // If user enabled, disabled, or changed timeout duration while door was already open, update timer cleanly
     if (cfg_.alertOpenTimeout == 0) {
         openTimeoutTimer_.stop();
-    } else if (!timeoutFired_ && !openTimeoutTimer_.isRunning()) {
-        openedAtMs_ = nowMs;
-        openTimeoutTimer_.start(nowMs, static_cast<uint32_t>(cfg_.alertOpenTimeout) * 1000u);
+        activeTimeoutSec_ = 0;
+    } else if (!timeoutFired_ && (!openTimeoutTimer_.isRunning() || activeTimeoutSec_ != cfg_.alertOpenTimeout)) {
+        if (!openTimeoutTimer_.isRunning()) {
+            openedAtMs_ = nowMs;
+        }
+        activeTimeoutSec_ = cfg_.alertOpenTimeout;
+        uint32_t targetMs = static_cast<uint32_t>(cfg_.alertOpenTimeout) * 1000u;
+        uint32_t elapsedMs = static_cast<uint32_t>(nowMs - openedAtMs_);
+        uint32_t remMs = (elapsedMs >= targetMs) ? 0u : (targetMs - elapsedMs);
+        openTimeoutTimer_.start(nowMs, remMs);
     }
 
     if (!timeoutFired_ && openTimeoutTimer_.expired(nowMs)) {

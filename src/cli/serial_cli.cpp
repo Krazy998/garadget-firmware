@@ -55,7 +55,7 @@ void SerialCli::handleLine(const char* line, uint32_t nowMs) {
     }
 
     if (std::strcmp(line, "config") == 0) {
-        char buf[768], id[32], ssid[40], ip[20], mac[24];
+        char buf[1152], id[32], ssid[40], ip[20], mac[24];
         wifi_.formatDeviceId(id, sizeof(id));
         wifi_.formatSsid(ssid, sizeof(ssid));
         wifi_.formatIp(ip, sizeof(ip));

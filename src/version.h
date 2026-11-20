@@ -10,8 +10,8 @@ namespace garadget {
 
 inline constexpr uint8_t kFirmwareMajor = 3;
 inline constexpr uint8_t kFirmwareMinor = 2;
-inline constexpr uint8_t kFirmwarePatch = 0;
-inline constexpr const char* kFirmwareVersion = "3.2.0";
+inline constexpr uint8_t kFirmwarePatch = 1;
+inline constexpr const char* kFirmwareVersion = "3.2.1";
 inline constexpr const char* kModelName = "Garadget P1";
 inline constexpr const char* kManufacturer = "Garadget";
 
@@ -60,5 +60,6 @@ inline constexpr size_t kMqttPassCap     = 48;
 inline constexpr size_t kHaPrefixCap     = 32;
 inline constexpr size_t kNtpServerCap    = 64;
 inline constexpr size_t kAdminPassCap    = 32;
+inline constexpr size_t kMinAdminPassLen = 4;
 
 } // namespace garadget

@@ -11,7 +11,7 @@ OS_BIN_DIR="${TOOLCHAIN_DIR}/device-os-bins/${DEVICE_OS_VER}"
 mkdir -p "${TOOLCHAIN_DIR}" "${DEVICE_OS_DIR}" "${GCC_ARM_DIR}" "${OS_BIN_DIR}"
 
 # 1. Clone official Particle Device OS 3.3.1 source & build system (shallow + submodules)
-if [ ! -f "${DEVICE_OS_DIR}/Makefile" ]; then
+if [ ! -f "${DEVICE_OS_DIR}/modules/photon/user-part/makefile" ]; then
   rm -rf "${DEVICE_OS_DIR}"
   echo "==> Cloning Particle Device OS v${DEVICE_OS_VER}..."
   git clone --depth 1 --branch "v${DEVICE_OS_VER}" \
@@ -20,16 +20,17 @@ if [ ! -f "${DEVICE_OS_DIR}/Makefile" ]; then
 fi
 
 # 2. Download official Device OS 3.3.1 pre-built P1 system parts + bootloader (for offline DFU flashing)
-for FILE in "p1-bootloader%403.3.1%2Blto.bin:p1-bootloader@3.3.1+lto.bin" \
-            "p1-system-part1%403.3.1.bin:p1-system-part1@3.3.1.bin" \
-            "p1-system-part2%403.3.1.bin:p1-system-part2@3.3.1.bin"; do
-  URL_NAME="${FILE%%:*}"
-  OUT_NAME="${FILE##*:}"
+for ENTRY in \
+  "p1-bootloader%403.3.1%2Blto.bin|p1-bootloader@3.3.1+lto.bin|2aa68fd341036fb999ce3c4f2881c252dd874e29ed8b81fbcba59be0bc3ab479" \
+  "p1-system-part1%403.3.1.bin|p1-system-part1@3.3.1.bin|88b7c36fbdfabb5fe712e991e7ff17c6a9b858c77baebede62a64c865a6e26eb" \
+  "p1-system-part2%403.3.1.bin|p1-system-part2@3.3.1.bin|19f2f39cdacb465fc3021066eb081cf937b167b4cdee30c28c19fd6851b8615c"; do
+  IFS='|' read -r URL_NAME OUT_NAME EXPECTED_SHA <<< "${ENTRY}"
   if [ ! -f "${OS_BIN_DIR}/${OUT_NAME}" ]; then
     echo "==> Downloading ${OUT_NAME}..."
     curl -fL --retry 3 -o "${OS_BIN_DIR}/${OUT_NAME}" \
       "https://github.com/particle-iot/device-os/releases/download/v${DEVICE_OS_VER}/${URL_NAME}"
   fi
+  echo "${EXPECTED_SHA}  ${OS_BIN_DIR}/${OUT_NAME}" | sha256sum -c - >/dev/null
 done
 
 # 3. Download official GNU Arm Embedded Toolchain 10-2020-q4-major (GCC 10.2.1)
