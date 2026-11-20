@@ -59,10 +59,25 @@ jobs:
             target/garadget.elf
             target/garadget.hex
 
+      - name: Extract release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'EOF'
+          import os, re
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(rf"^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
+          notes = m.group(1).strip() if m else ""
+          with open("/tmp/release_notes.md", "w", encoding="utf-8") as f:
+              f.write(notes + "\n" if notes else "")
+          print("Extracted changelog section:", bool(notes))
+          EOF
+
       - name: Publish GitHub Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: /tmp/release_notes.md
           generate_release_notes: true
           files: |
             target/garadget.bin

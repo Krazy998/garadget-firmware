@@ -211,6 +211,7 @@ If an Admin Password (`apass`) is configured, include header `X-Auth-Token: <pas
 
 ## Credits & License
 
+- **Changelog**: See [CHANGELOG.md](CHANGELOG.md) for full release history.
 - **Original Project**: Based on the [Garadget](https://github.com/Garadget/firmware) project by Denis Grisak. This is an independent, unofficial, cloud-free rewrite.
 - **AI-Assisted Rewrite**: This modern cloud-free rewrite was authored with **Gemini 4 Neon AI** to keep existing Garadget hardware alive with long-term local support for users still running these devices.
 - **SoftAP RSA**: Uses Tom Wu's BSD-licensed `jsbn` RSA library (`web/softap/rsa-utils/`) for Particle P1 SoftAP credential encryption.
