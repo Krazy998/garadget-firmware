@@ -54,6 +54,7 @@ void SntpClient::tick(uint32_t nowMs, bool wifiReady) {
             int got = gNtpUdp.read(buf, sizeof(buf));
             IPAddress fromIp = gNtpUdp.remoteIP();
             uint16_t fromPort = static_cast<uint16_t>(gNtpUdp.remotePort());
+            gNtpUdp.flush();
 
             IPAddress expectedIp(expectedServerIp_[0], expectedServerIp_[1],
                                  expectedServerIp_[2], expectedServerIp_[3]);
@@ -144,9 +145,11 @@ void SntpClient::tick(uint32_t nowMs, bool wifiReady) {
             udpStarted_ = true;
         }
 
-        // Embed a transmit timestamp nonce so replies must echo it in Originate Timestamp
+        // Embed an unpredictable transmit timestamp nonce (hardware-RNG backed on P1) echoed in Originate Timestamp
         txSec_ = (Time.isValid() ? static_cast<uint32_t>(Time.now()) : 0u) + kNtpUnixOffset;
-        txFrac_ = nowMs ^ (nowMs << 13) ^ 0xA5C3F19Du;
+        txFrac_ = static_cast<uint32_t>(random(0x7FFFFFFF)) ^
+                  (static_cast<uint32_t>(random(0x7FFFFFFF)) << 1) ^
+                  static_cast<uint32_t>(micros());
 
         uint8_t req[48] = {};
         req[0] = 0x23; // LI=0, VN=4, Mode=3 (Client)

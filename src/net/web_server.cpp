@@ -33,7 +33,10 @@ void sendTextResponse(TCPClient& client, int statusCode, const char* statusText,
         "X-Frame-Options: DENY\r\n"
         "Connection: close\r\n\r\n",
         statusCode, statusText, contentType, static_cast<unsigned long>(bodyLen));
-    client.write(reinterpret_cast<const uint8_t*>(hdr), static_cast<size_t>(hlen));
+    if (hlen > 0) {
+        size_t hdrWriteLen = (static_cast<size_t>(hlen) >= sizeof(hdr)) ? (sizeof(hdr) - 1) : static_cast<size_t>(hlen);
+        client.write(reinterpret_cast<const uint8_t*>(hdr), hdrWriteLen);
+    }
     if (body && bodyLen > 0) {
         size_t sent = 0;
         while (sent < bodyLen && client.connected()) {
@@ -59,7 +62,10 @@ void sendGzipHtml(TCPClient& client, const unsigned char* data, size_t len) {
         "Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'\r\n"
         "Connection: close\r\n\r\n",
         static_cast<unsigned long>(len));
-    client.write(reinterpret_cast<const uint8_t*>(hdr), static_cast<size_t>(hlen));
+    if (hlen > 0) {
+        size_t hdrWriteLen = (static_cast<size_t>(hlen) >= sizeof(hdr)) ? (sizeof(hdr) - 1) : static_cast<size_t>(hlen);
+        client.write(reinterpret_cast<const uint8_t*>(hdr), hdrWriteLen);
+    }
 
     size_t sent = 0;
     while (sent < len && client.connected()) {
@@ -418,6 +424,14 @@ void WebServer::tick(uint32_t nowMs) {
 
     const char* body = (headerEnd > 0 && reqLen > headerEnd) ? (reqBuf + headerEnd) : "";
     size_t bodyLen = (headerEnd > 0 && reqLen > headerEnd) ? (reqLen - headerEnd) : 0;
+
+    if (!isOtaStream && contentLen > 0 && bodyLen < contentLen) {
+        const char* err = "{\"ok\":false,\"error\":\"body_timeout\"}";
+        sendTextResponse(client, 408, "Request Timeout", "application/json", err, std::strlen(err));
+        client.flush();
+        client.stop();
+        return;
+    }
 
     // Serve root dashboard UI without auth (JS handles 401 modal cleanly)
     if (std::strcmp(method, "GET") == 0 &&

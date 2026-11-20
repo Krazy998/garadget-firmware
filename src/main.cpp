@@ -1,5 +1,5 @@
 /**
- * Garadget Local Firmware v3.2.1
+ * Garadget Local Firmware v3.2.2
  * Target: Particle P1 (STM32F205 + BCM43362) running Particle Device OS 3.3.1
  *
  * Completely local, cloud-free rewrite:
@@ -258,6 +258,12 @@ void loop() {
     bool listeningNow = gWifi.isListening();
     if (listeningNow != gLastWifiListening) {
         gLastWifiListening = listeningNow;
+        if (!listeningNow) {
+            // Sync config change snapshots in case settings were updated during SoftAP setup
+            snapshotIpCfg(gConfig.data());
+            gLastMqttHash = hashMqttCfg(gConfig.data());
+            gSntp.applyTimezoneNow();
+        }
         applyLedSettings();
     }
     gSntp.tick(now, gWifi.isReady());

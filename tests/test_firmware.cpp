@@ -496,6 +496,7 @@ void testHttpSecurityAndAcl() {
     assert(verifyAuthToken(authedReq, aLen, "MyPass123"));
     assert(!verifyAuthToken(authedReq, aLen, "MyPass12"));
     assert(!verifyAuthToken(authedReq, aLen, "MyPass1234"));
+    assert(!verifyAuthToken(authedReq, aLen, "")); // Must fail closed on empty adminPass
 
     // 3. CSRF protection: same-origin JSON passes; cross-origin or text/plain fails
     assert(verifyCsrfProtection(authedReq, aLen, "POST", "/api/command"));

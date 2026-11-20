@@ -86,7 +86,8 @@ void softapPageHandler(const char* url,
     if (std::strcmp(url, "/exit-setup") == 0 && gSoftApWifi) {
         cb(cbArg, 0, 200, "application/json", nullptr);
         response->write("{\"r\":0}");
-        gSoftApWifi->exitSetupMode();
+        // Defer WiFi.listen(false) to main loop so the HTTP response flushes cleanly first
+        gSoftApWifi->requestExitSetupMode();
         return;
     }
 
@@ -95,8 +96,14 @@ void softapPageHandler(const char* url,
         if (request->bytes_left > 0 && request->bytes_left <= 1024) {
             char* body = request->fetch_as_string();
             if (body) {
+                DeviceConfig backup = gSoftApConfig->data();
                 // Physical/local SoftAP setup is the sanctioned channel for initial Web Admin Password setup & reset
                 rc = gSoftApConfig->applyJsonConfig(body, std::strlen(body), true /* allowAdminPass */);
+                if (rc >= 0 && !gSoftApConfig->hasAdminPassword()) {
+                    // Server-side enforcement: SoftAP setup must result in a configured Web Admin Password
+                    gSoftApConfig->mutableData() = backup;
+                    rc = -1;
+                }
                 if (rc >= 0) {
                     gSoftApConfig->save(*gSoftApStorage);
                     if (gSoftApWifi) {

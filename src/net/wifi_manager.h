@@ -15,7 +15,7 @@ public:
     void tick(uint32_t nowMs);
 
     void enterSetupMode();
-    void exitSetupMode();
+    void requestExitSetupMode();
     void touchSetupActivity();
     void clearCredentials();
 
@@ -36,9 +36,12 @@ private:
 
     Timer reconnectTimer_;
     Timer setupTimeoutTimer_;
+    Timer exitSetupTimer_;
     bool connecting_ = false;
     bool wasReady_ = false;
     bool wasListening_ = false;
+    volatile bool exitSetupRequested_ = false;
+    volatile bool setupActivityTouched_ = false;
 };
 
 } // namespace garadget

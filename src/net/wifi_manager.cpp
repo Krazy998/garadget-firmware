@@ -51,14 +51,32 @@ void WifiManager::tick(uint32_t nowMs) {
         wasReady_ = false;
         if (!wasListening_) {
             wasListening_ = true;
+            exitSetupRequested_ = false;
+            setupActivityTouched_ = false;
+            exitSetupTimer_.stop();
             setupTimeoutTimer_.start(nowMs, kSetupIdleTimeoutMs);
-        } else if (setupTimeoutTimer_.expired(nowMs)) {
-            if (WiFi.hasCredentials()) {
-                Log.info("WiFi: SoftAP idle timeout reached, returning to saved Wi-Fi");
-                WiFi.listen(false);
-                wasListening_ = false;
-            } else {
+        } else {
+            if (setupActivityTouched_) {
+                setupActivityTouched_ = false;
                 setupTimeoutTimer_.start(nowMs, kSetupIdleTimeoutMs);
+            }
+            if (exitSetupRequested_) {
+                exitSetupRequested_ = false;
+                exitSetupTimer_.start(nowMs, 350u);
+            }
+            if (exitSetupTimer_.expired(nowMs)) {
+                Log.info("WiFi: exiting SoftAP setup mode");
+                wasListening_ = false;
+                setupTimeoutTimer_.stop();
+                WiFi.listen(false);
+            } else if (setupTimeoutTimer_.expired(nowMs)) {
+                if (WiFi.hasCredentials()) {
+                    Log.info("WiFi: SoftAP idle timeout reached, returning to saved Wi-Fi");
+                    WiFi.listen(false);
+                    wasListening_ = false;
+                } else {
+                    setupTimeoutTimer_.start(nowMs, kSetupIdleTimeoutMs);
+                }
             }
         }
         return;
@@ -66,6 +84,9 @@ void WifiManager::tick(uint32_t nowMs) {
 
     if (wasListening_) {
         wasListening_ = false;
+        exitSetupRequested_ = false;
+        setupActivityTouched_ = false;
+        exitSetupTimer_.stop();
         setupTimeoutTimer_.stop();
     }
 
@@ -111,22 +132,17 @@ void WifiManager::enterSetupMode() {
     Log.info("WiFi: entering SoftAP setup mode (192.168.0.1)");
     connecting_ = false;
     wasListening_ = false;
+    exitSetupRequested_ = false;
+    setupActivityTouched_ = false;
     WiFi.listen(true);
 }
 
-void WifiManager::exitSetupMode() {
-    if (WiFi.listening()) {
-        Log.info("WiFi: exiting SoftAP setup mode");
-        wasListening_ = false;
-        setupTimeoutTimer_.stop();
-        WiFi.listen(false);
-    }
+void WifiManager::requestExitSetupMode() {
+    exitSetupRequested_ = true;
 }
 
 void WifiManager::touchSetupActivity() {
-    if (WiFi.listening()) {
-        setupTimeoutTimer_.start(millis(), kSetupIdleTimeoutMs);
-    }
+    setupActivityTouched_ = true;
 }
 
 void WifiManager::clearCredentials() {

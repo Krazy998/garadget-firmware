@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.2.2] - 2026-11-21
+
+### Security
+- **Server-Side SoftAP Password Enforcement**: SoftAP `POST /save-config` now enforces server-side that a Web Admin Password is configured (rolling back if omitted on first-time setup).
+- **Fail-Closed Auth Token Check**: Updated `verifyAuthToken()` to fail closed (`false`) if `adminPass` is empty.
+- **Hardware-RNG SNTP Nonce**: Upgraded SNTP Originate Timestamp nonces to use Particle P1's hardware-backed `random()` + `micros()` and added `gNtpUdp.flush()` to drain oversized datagrams cleanly.
+
+### Fixed
+- **Thread-Safe SoftAP Exit & Activity Tracking**: Deferred `WiFi.listen(false)` from `/exit-setup` to the main loop (350 ms delay) so HTTP responses flush cleanly before SoftAP tears down, and switched SoftAP activity tracking to cross-thread `volatile` flags.
+- **SoftAP Static IP Pre-Validation & Recovery UX**: Validated Static IP/Subnet/Gateway fields in the SoftAP UI before `/clear-wifi` runs so typos don't clear saved Wi-Fi credentials, and exposed the **Set / Reset Admin Password Only (Keep Current Wi-Fi)** button whenever saved Wi-Fi exists.
+- **SoftAP → LAN Config Snapshot Sync**: Resynced IP/MQTT change-detection snapshots and timezone upon exiting SoftAP so subsequent unrelated LAN saves don't trigger spurious reboots.
+- **HTTP Server & Login Polish**: Added `408 Request Timeout` for truncated non-OTA request bodies, clamped `snprintf` header writes safely, cleared the login password field on submit, and added an `Invalid admin password` toast on `401`.
+
+---
+
 ## [3.2.1] - 2026-11-21
 
 ### Security
@@ -78,6 +93,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed (vs. Legacy Garadget v1.26)
 - Eliminated `sprintf` buffer overflows, MQTT heap leaks on config reload, infinite blocking TCP socket reads, unsigned integer underflow in laser reflection math, and unverified EEPROM config loads (now CRC32-protected with 60s `ApplicationWatchdog` and boot-safe `PIN_RELAY` LOW).
 
+[3.2.2]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.1...v3.2.2
 [3.2.1]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.0.0...v3.1.0

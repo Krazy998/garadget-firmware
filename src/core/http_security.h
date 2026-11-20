@@ -74,9 +74,9 @@ inline const char* findHttpHeaderValue(const char* headers, size_t headerLen,
     return nullptr;
 }
 
-// Verifies X-Auth-Token header strictly against adminPass in constant time.
+// Verifies X-Auth-Token header strictly against adminPass in constant time (fails closed if adminPass is empty).
 inline bool verifyAuthToken(const char* headers, size_t headerLen, const char* adminPass) {
-    if (!adminPass || adminPass[0] == '\0') return true;
+    if (!adminPass || adminPass[0] == '\0') return false;
     size_t tokLen = 0;
     const char* tok = findHttpHeaderValue(headers, headerLen, "x-auth-token", &tokLen);
     if (!tok) return false;

@@ -148,7 +148,10 @@ function loadCfg(){
       $('apassHint').textContent='Web Admin Password is already set. Enter a new password below to reset it, or leave blank to keep existing.';
       $('adminPass').placeholder='Leave blank to keep existing';
       $('adminPass2').placeholder='Confirm new password';
-      if(c.ssid)$('resetPwBtn').style.display='';
+    }
+    if(c.ssid){
+      $('resetPwBtn').textContent=apassSet?'Reset Admin Password Only (Keep Current Wi-Fi)':'Set Admin Password Only (Keep Current Wi-Fi)';
+      $('resetPwBtn').style.display='';
     }
     if(c.nme)$('nme').value=c.nme;
     $('mqttOn').checked=!!c.mqtt;
@@ -183,6 +186,11 @@ function submitSetup(){
   if(!apassSet&&ap1.length<4){showMsg('Please set a Web Admin Password (at least 4 characters)',true);return;}
   if(ap1.length>0&&ap1.length<4){showMsg('Web Admin Password must be at least 4 characters',true);return;}
   if(ap1!==ap2){showMsg('Web Admin Passwords do not match',true);return;}
+  const isIpv4=s=>/^(\d{1,3}\.){3}\d{1,3}$/.test(s)&&s.split('.').every(n=>Number(n)<=255);
+  if($('useStatic').checked){
+    const sip=$('sip').value.trim(),smask=$('smask').value.trim()||'255.255.255.0',sgw=$('sgw').value.trim(),sdns=$('sdns').value.trim();
+    if(!isIpv4(sip)||!isIpv4(smask)||!isIpv4(sgw)||(sdns&&!isIpv4(sdns))){showMsg('Please enter valid Static IP, Subnet Mask, and Gateway',true);return;}
+  }
   const sel=document.querySelector('input[name=ap]:checked');
   const idx=sel?Number(sel.value):-1;
   let ap={idx:0};
