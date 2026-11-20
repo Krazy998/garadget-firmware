@@ -50,7 +50,7 @@ public:
                                       const char* ipStr,
                                       char* outTopic, size_t topicCap,
                                       char* outPayload, size_t payloadCap);
-    static constexpr uint8_t kDiscoveryEntityCount = 8;
+    static constexpr uint8_t kDiscoveryEntityCount = 10;
 
 private:
     static void onConnectStatic(void* ctx);

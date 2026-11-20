@@ -47,6 +47,10 @@ bool HaMqttBridge::buildDiscoveryPayload(uint8_t entityIndex,
     std::snprintf(cfgTopic, sizeof(cfgTopic), "%s/config", baseTopic);
     char threshCmdTopic[80];
     std::snprintf(threshCmdTopic, sizeof(threshCmdTopic), "%s/set-threshold", baseTopic);
+    char stealthCmdTopic[96];
+    std::snprintf(stealthCmdTopic, sizeof(stealthCmdTopic), "%s/set-stealth", baseTopic);
+    char ledBriCmdTopic[96];
+    std::snprintf(ledBriCmdTopic, sizeof(ledBriCmdTopic), "%s/set-led-brightness", baseTopic);
 
     char uid[64];
     char cfgUrl[48];
@@ -215,6 +219,44 @@ bool HaMqttBridge::buildDiscoveryPayload(uint8_t entityIndex,
             writeDeviceBlock(w, false);
             break;
 
+        case 8: // Stealth Mode Switch (turns RGB status LED off)
+            std::snprintf(outTopic, topicCap, "%s/switch/%s_stealth/config", prefix, uidBase);
+            std::snprintf(uid, sizeof(uid), "%s_stealth", uidBase);
+            w.keyString("name", "Stealth Mode");
+            w.keyString("uniq_id", uid);
+            w.keyString("stat_t", cfgTopic);
+            w.keyString("val_tpl", "{{ 'ON' if value_json.leds == 1 else 'OFF' }}");
+            w.keyString("cmd_t", stealthCmdTopic);
+            w.keyString("pl_on", "ON");
+            w.keyString("pl_off", "OFF");
+            w.keyString("ent_cat", "config");
+            w.keyString("ic", "mdi:led-off");
+            w.keyString("avty_t", availTopic);
+            w.keyString("pl_avail", "Online");
+            w.keyString("pl_not_avail", "Offline");
+            writeDeviceBlock(w, false);
+            break;
+
+        case 9: // Status LED Brightness Number (0..100%)
+            std::snprintf(outTopic, topicCap, "%s/number/%s_led_brightness/config", prefix, uidBase);
+            std::snprintf(uid, sizeof(uid), "%s_led_brightness", uidBase);
+            w.keyString("name", "LED Brightness");
+            w.keyString("uniq_id", uid);
+            w.keyString("stat_t", cfgTopic);
+            w.keyString("val_tpl", "{{ value_json.ledb }}");
+            w.keyString("cmd_t", ledBriCmdTopic);
+            w.keyInt("min", 0);
+            w.keyInt("max", 100);
+            w.keyInt("step", 5);
+            w.keyString("unit_of_meas", "%");
+            w.keyString("ent_cat", "config");
+            w.keyString("ic", "mdi:brightness-6");
+            w.keyString("avty_t", availTopic);
+            w.keyString("pl_avail", "Online");
+            w.keyString("pl_not_avail", "Offline");
+            writeDeviceBlock(w, false);
+            break;
+
         default:
             return false;
     }
@@ -274,6 +316,12 @@ void HaMqttBridge::onConnected() {
     client_.subscribe(topic, 0);
 
     std::snprintf(topic, sizeof(topic), "garadget/%s/set-threshold", topicId_);
+    client_.subscribe(topic, 0);
+
+    std::snprintf(topic, sizeof(topic), "garadget/%s/set-stealth", topicId_);
+    client_.subscribe(topic, 0);
+
+    std::snprintf(topic, sizeof(topic), "garadget/%s/set-led-brightness", topicId_);
     client_.subscribe(topic, 0);
 
     if (config_.data().haDiscovery) {
@@ -343,6 +391,38 @@ void HaMqttBridge::onMessage(const char* topic, const char* payload, size_t len)
             config_.save(storage_);
             publishConfig();
             alerts_.onConfigUpdated(millis());
+        }
+        return;
+    }
+
+    // Set-stealth topic (from Home Assistant Switch entity: ON / OFF)
+    std::snprintf(expected, sizeof(expected), "garadget/%s/set-stealth", topicId_);
+    if (std::strcmp(topic, expected) == 0) {
+        int res = config_.setParam("leds", payload);
+        if (res >= 0) {
+            if (res > 0) {
+                config_.save(storage_);
+                alerts_.onConfigUpdated(millis());
+                if (onConfigSaved_) onConfigSaved_(hookCtx_);
+            } else {
+                publishConfig();
+            }
+        }
+        return;
+    }
+
+    // Set-led-brightness topic (from Home Assistant Number entity: 0..100)
+    std::snprintf(expected, sizeof(expected), "garadget/%s/set-led-brightness", topicId_);
+    if (std::strcmp(topic, expected) == 0) {
+        int res = config_.setParam("ledb", payload);
+        if (res >= 0) {
+            if (res > 0) {
+                config_.save(storage_);
+                alerts_.onConfigUpdated(millis());
+                if (onConfigSaved_) onConfigSaved_(hookCtx_);
+            } else {
+                publishConfig();
+            }
         }
         return;
     }

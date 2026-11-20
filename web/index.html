@@ -250,6 +250,28 @@ nav button.active{color:#fff;background:var(--accent)}
       <div class="actions"><button class="btn" onclick="saveIpCfg()">Save Network Settings &amp; Reboot</button></div>
     </div>
     <div class="card">
+      <h2>Status LED &amp; Stealth Mode</h2>
+      <label class="toggle"><input type="checkbox" id="cfg-leds"> Stealth Mode (Status LED Off)</label>
+      <div class="field" style="margin-top:10px">
+        <label>Normal LED Brightness: <strong id="ledbLbl">100%</strong></label>
+        <input type="range" id="cfg-ledb" min="0" max="100" step="5" value="100" oninput="$('ledbLbl').textContent=this.value+'%'" style="width:100%;accent-color:var(--accent)">
+        <small>Also controllable live from Home Assistant (Stealth Mode switch &amp; LED Brightness slider).</small>
+      </div>
+      <div class="actions"><button class="btn" onclick="saveLedCfg()">Save LED Settings</button></div>
+    </div>
+    <div class="card">
+      <h2>Config Backup &amp; Restore</h2>
+      <div class="field">
+        <label>Restore Backup (.json)</label>
+        <input type="file" id="cfgImportFile" accept=".json,application/json" style="padding:8px;border:1px dashed var(--border);border-radius:9px;background:var(--card2);color:var(--fg);width:100%">
+        <small>Export omits passwords for safety; importing preserves existing passwords unless present in the file.</small>
+      </div>
+      <div class="actions">
+        <button class="btn btn-ghost" onclick="exportCfg()">Export Config (.json)</button>
+        <button class="btn" onclick="importCfg()">Import Config</button>
+      </div>
+    </div>
+    <div class="card">
       <h2>Web UI Security (Optional)</h2>
       <div class="field"><label>Admin Password</label><input type="password" id="cfg-apass" placeholder="Leave blank for open LAN access"><small id="apassHint">Currently no password set</small></div>
       <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button><button class="btn btn-ghost" onclick="clearAdminPass()">Remove Password</button></div>
@@ -408,11 +430,47 @@ async function loadConfig(){
     $('cfg-smask').value=c.smask||'255.255.255.0';
     $('cfg-sgw').value=c.sgw||'';
     $('cfg-sdns').value=c.sdns||'';
+    $('cfg-leds').checked=!!c.leds;
+    $('cfg-ledb').value=String(c.ledb??100);
+    $('ledbLbl').textContent=(c.ledb??100)+'%';
     toggleStaticIp();
   }catch(e){}
 }
 
 function toggleStaticIp(){$('staticIpBox').style.display=$('cfg-ipm').value==='1'?'grid':'none';}
+
+function saveLedCfg(){
+  saveCfg({leds:$('cfg-leds').checked?1:0,ledb:Number($('cfg-ledb').value)});
+}
+
+async function exportCfg(){
+  try{
+    const c=await api('/api/config');
+    const clean={};
+    ['nme','rdt','mtt','rlt','rlp','srr','srt','smode','aev','aot','ans','ane','tzo','ntp','mqtt','ha','hapfx','mqhost','mqpt','mqus','mqto','ipm','sip','smask','sgw','sdns','leds','ledb'].forEach(k=>{if(c[k]!==undefined)clean[k]=c[k];});
+    const blob=new Blob([JSON.stringify(clean,null,2)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='garadget-'+(c.nme||'config').replace(/[^a-zA-Z0-9_-]/g,'_')+'-backup.json';
+    a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    toast('Config backup downloaded');
+  }catch(e){toast('Export failed',true);}
+}
+
+async function importCfg(){
+  const inp=$('cfgImportFile');
+  if(!inp.files||!inp.files.length){toast('Select a .json backup file first',true);return;}
+  try{
+    const raw=JSON.parse(await inp.files[0].text());
+    const allowed=['nme','rdt','mtt','rlt','rlp','srr','srt','smode','aev','aot','ans','ane','tzo','ntp','mqtt','ha','hapfx','mqhost','mqip','mqpt','mqus','mqpw','mqto','ipm','sip','smask','sgw','sdns','leds','ledb'];
+    const clean={};
+    allowed.forEach(k=>{if(raw[k]!==undefined)clean[k]=raw[k];});
+    const count=Object.keys(clean).length;
+    if(!count){toast('No valid config keys found in file',true);return;}
+    if(!confirm('Restore '+count+' settings from '+inp.files[0].name+'?'))return;
+    await saveCfg(clean);inp.value='';
+  }catch(e){toast('Invalid JSON backup file',true);}
+}
 
 async function saveIpCfg(){
   const ipm=Number($('cfg-ipm').value);

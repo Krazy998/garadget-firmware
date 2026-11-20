@@ -13,7 +13,7 @@ namespace garadget {
 // Must remain well under Particle P1's 2047-byte emulated EEPROM limit.
 struct DeviceConfig {
     static constexpr uint32_t kMagic = 0x47444732u; // "GDG2"
-    static constexpr uint16_t kSchemaVersion = 3;
+    static constexpr uint16_t kSchemaVersion = 4;
 
     uint32_t magic;
     uint16_t schemaVersion;
@@ -58,7 +58,11 @@ struct DeviceConfig {
     uint8_t staticGw[4];             // sgw
     uint8_t staticDns[4];            // sdns
     uint8_t ipMode;                  // ipm: 0 = DHCP, 1 = Static IP
-    uint8_t ipPad[3];
+
+    // Status RGB LED dimming & Stealth Mode (added in schema v4, reusing former ipPad bytes)
+    uint8_t ledStealth;              // leds: 0 = normal, 1 = stealth (LED off)
+    uint8_t ledBrightness;           // ledb: 0..100 % brightness when not in stealth mode
+    uint8_t ledPad;
 
     uint32_t crc32;
 };

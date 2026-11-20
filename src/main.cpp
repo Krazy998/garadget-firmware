@@ -1,5 +1,5 @@
 /**
- * Garadget Local Firmware v3.0.0
+ * Garadget Local Firmware v3.2.0
  * Target: Particle P1 (STM32F205 + BCM43362) running Particle Device OS 3.3.1
  *
  * Completely local, cloud-free rewrite:
@@ -60,6 +60,44 @@ bool gPendingReboot = false;
 garadget::Timer gRebootTimer;
 uint8_t gLastIpMode = 0;
 uint8_t gLastIpCfg[16]{};
+uint32_t gLastMqttHash = 0;
+bool gLastWifiListening = false;
+
+uint32_t hashMqttCfg(const garadget::DeviceConfig& c) {
+    uint32_t h = 2166136261u;
+    auto mix = [&](const void* p, size_t n) {
+        const auto* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i) {
+            h ^= b[i];
+            h *= 16777619u;
+        }
+    };
+    mix(&c.mqttEnabled, sizeof(c.mqttEnabled));
+    mix(&c.haDiscovery, sizeof(c.haDiscovery));
+    mix(&c.mqttPort, sizeof(c.mqttPort));
+    mix(&c.mqttKeepAliveSec, sizeof(c.mqttKeepAliveSec));
+    mix(c.mqttHost, std::strlen(c.mqttHost));
+    mix(c.mqttUser, std::strlen(c.mqttUser));
+    mix(c.mqttPass, std::strlen(c.mqttPass));
+    mix(c.haPrefix, std::strlen(c.haPrefix));
+    mix(c.deviceName, std::strlen(c.deviceName));
+    return h;
+}
+
+void applyLedSettings() {
+    if (gWifi.isListening()) {
+        // Keep LED clearly visible during SoftAP Wi-Fi setup mode
+        RGB.brightness(128);
+        return;
+    }
+    const auto& cfg = gConfig.data();
+    if (cfg.ledStealth) {
+        RGB.brightness(0);
+    } else {
+        uint8_t level = static_cast<uint8_t>((static_cast<uint16_t>(cfg.ledBrightness) * 255u) / 100u);
+        RGB.brightness(level);
+    }
+}
 
 void snapshotIpCfg(const garadget::DeviceConfig& c) {
     gLastIpMode = c.ipMode;
@@ -95,7 +133,14 @@ void onConfigSaved(void*) {
     uint32_t now = millis();
     gHardware.configureSensorMode(static_cast<garadget::SensorMode>(gConfig.data().sensorMode));
     gSntp.applyTimezoneNow();
-    gMqtt.reconfigure(now);
+    applyLedSettings();
+    uint32_t newMqttHash = hashMqttCfg(gConfig.data());
+    if (newMqttHash != gLastMqttHash) {
+        gLastMqttHash = newMqttHash;
+        gMqtt.reconfigure(now);
+    } else {
+        gMqtt.publishConfig();
+    }
     if (ipCfgChanged(gConfig.data())) {
         snapshotIpCfg(gConfig.data());
         gWifi.applyIpConfig(gConfig.data());
@@ -168,7 +213,10 @@ void setup() {
 
     garadget::initSoftApPortal(&gConfig, &gStorage, &gWifi);
     snapshotIpCfg(gConfig.data());
+    gLastMqttHash = hashMqttCfg(gConfig.data());
     gWifi.init(now, gConfig.data());
+    gLastWifiListening = gWifi.isListening();
+    applyLedSettings();
     gSntp.init();
 
     gMqtt.setHooks(onConfigSaved, onSystemAction, nullptr);
@@ -200,6 +248,11 @@ void loop() {
 
     // 3. Local network services (never Particle Cloud)
     gWifi.tick(now);
+    bool listeningNow = gWifi.isListening();
+    if (listeningNow != gLastWifiListening) {
+        gLastWifiListening = listeningNow;
+        applyLedSettings();
+    }
     gSntp.tick(now, gWifi.isReady());
     gMqtt.tick(now);
     gWeb.tick(now);

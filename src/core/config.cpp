@@ -60,6 +60,9 @@ void ConfigManager::resetDefaults() {
     cfg_.staticMask[0] = 255; cfg_.staticMask[1] = 255; cfg_.staticMask[2] = 255; cfg_.staticMask[3] = 0;
     cfg_.staticGw[0] = 0; cfg_.staticGw[1] = 0; cfg_.staticGw[2] = 0; cfg_.staticGw[3] = 0;
     cfg_.staticDns[0] = 0; cfg_.staticDns[1] = 0; cfg_.staticDns[2] = 0; cfg_.staticDns[3] = 0;
+    cfg_.ledStealth = 0;
+    cfg_.ledBrightness = 100;
+    cfg_.ledPad = 0;
 
     tz_.setConfig(cfg_.timeZone);
     cfg_.crc32 = calcConfigCrc();
@@ -78,7 +81,7 @@ bool ConfigManager::load(ConfigStorage& storage) {
     }
 
     if (loaded.schemaVersion == 2) {
-        // Seamless v2 -> v3 migration: v2 crc32 lived at offsetof(DeviceConfig, staticIp)
+        // Seamless v2 -> v4 migration: v2 crc32 lived at offsetof(DeviceConfig, staticIp)
         constexpr size_t kV2CrcOffset = offsetof(DeviceConfig, staticIp);
         uint32_t storedV2Crc = 0;
         std::memcpy(&storedV2Crc, reinterpret_cast<const uint8_t*>(&loaded) + kV2CrcOffset, sizeof(uint32_t));
@@ -93,7 +96,20 @@ bool ConfigManager::load(ConfigStorage& storage) {
         loaded.staticMask[0] = 255; loaded.staticMask[1] = 255; loaded.staticMask[2] = 255; loaded.staticMask[3] = 0;
         std::memset(loaded.staticGw, 0, sizeof(loaded.staticGw));
         std::memset(loaded.staticDns, 0, sizeof(loaded.staticDns));
-        std::memset(loaded.ipPad, 0, sizeof(loaded.ipPad));
+        loaded.ledStealth = 0;
+        loaded.ledBrightness = 100;
+        loaded.ledPad = 0;
+    } else if (loaded.schemaVersion == 3) {
+        // Seamless v3 -> v4 migration: same struct layout, v3 CRC covers identical bytes before crc32
+        uint32_t expectedV3Crc = computeCrc32(&loaded, offsetof(DeviceConfig, crc32));
+        if (loaded.crc32 != expectedV3Crc) {
+            resetDefaults();
+            return false;
+        }
+        loaded.schemaVersion = DeviceConfig::kSchemaVersion;
+        loaded.ledStealth = 0;
+        loaded.ledBrightness = 100;
+        loaded.ledPad = 0;
     } else if (loaded.schemaVersion == DeviceConfig::kSchemaVersion) {
         uint32_t expectedCrc = computeCrc32(&loaded, offsetof(DeviceConfig, crc32));
         if (loaded.crc32 != expectedCrc) {
@@ -152,6 +168,7 @@ bool ConfigManager::validate() const {
             return false;
         }
     }
+    if (cfg_.ledStealth > 1 || cfg_.ledBrightness > 100) return false;
     return true;
 }
 
@@ -438,6 +455,29 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
         return 1;
     }
 
+    if (std::strcmp(key, "leds") == 0) {
+        uint8_t next = 0;
+        if (std::strcmp(value, "ON") == 0 || std::strcmp(value, "on") == 0 ||
+            std::strcmp(value, "true") == 0 || std::strcmp(value, "1") == 0) {
+            next = 1;
+        } else if (std::strcmp(value, "OFF") == 0 || std::strcmp(value, "off") == 0 ||
+                   std::strcmp(value, "false") == 0 || std::strcmp(value, "0") == 0) {
+            next = 0;
+        } else {
+            return -1;
+        }
+        if (cfg_.ledStealth == next) return 0;
+        cfg_.ledStealth = next;
+        return 1;
+    }
+
+    if (std::strcmp(key, "ledb") == 0) {
+        if (!parseIntStrict(value, num) || num < 0 || num > 100) return -1;
+        if (cfg_.ledBrightness == static_cast<uint8_t>(num)) return 0;
+        cfg_.ledBrightness = static_cast<uint8_t>(num);
+        return 1;
+    }
+
     return -1;
 }
 
@@ -562,6 +602,8 @@ void ConfigManager::toJson(char* out, size_t outCap,
     fmtIp(cfg_.staticMask, ipBuf); w.keyString("smask", ipBuf);
     fmtIp(cfg_.staticGw, ipBuf);   w.keyString("sgw", ipBuf);
     fmtIp(cfg_.staticDns, ipBuf);  w.keyString("sdns", ipBuf);
+    w.keyUInt("leds", cfg_.ledStealth);
+    w.keyUInt("ledb", cfg_.ledBrightness);
     w.endObject();
 }
 

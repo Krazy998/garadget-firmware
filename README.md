@@ -13,7 +13,8 @@ A complete, **100% local and cloud-free** C++17 firmware rewrite for the **Garad
 
 - **100% Cloudless** — Removes all Particle Cloud and Garadget Cloud dependencies. Runs purely on your local Wi-Fi network (supports DHCP or Static IP + custom DNS).
 - **Built-in Modern Web UI** — Responsive dark/light dashboard hosted directly on the device (`http://<device-ip>/`) with live door animation, Open/Stop/Close buttons, real-time laser reflection meter, and full configuration.
-- **Home Assistant Auto-Discovery & MQTT 3.1.1** — Automatically creates a **Garadget P1** device in Home Assistant (5-state garage cover, laser reflection, brightness, Wi-Fi signal, time in state, alerts, threshold slider, and reboot button) while keeping backwards-compatible `garadget/<name>/...` MQTT topics.
+- **Home Assistant Auto-Discovery & MQTT 3.1.1** — Automatically creates a **Garadget P1** device in Home Assistant (5-state garage cover, laser reflection, brightness, Wi-Fi signal, time in state, alerts, threshold slider, **Stealth Mode** LED switch, **LED Brightness** slider, and reboot button) while keeping backwards-compatible `garadget/<name>/...` MQTT topics.
+- **Built-in Config Backup & Restore** — One-click JSON export/import of settings in the Web UI (**System** tab) plus RGB status LED dimming / Stealth Mode.
 - **Wireless Local Web OTA** — Upload future `.bin` updates right from your browser or `make ota` with built-in P1 header and CRC32 validation.
 - **Original Hardware & Logic Preserved** — Keeps Garadget's laser optical sensor (`D2`/`A0`), multi-click relay controller (`D3`), dry-contact switch option (`D0`, now runtime-selectable), SoftAP Wi-Fi setup (`192.168.0.1`), and local SNTP time/DST alerts — with safety fixes and a 60s hardware watchdog.
 
@@ -156,9 +157,11 @@ Default topic root for Device Name `Garage`:
 | `garadget/Garage/command` | Subscribe | `open`, `close`, `stop`, `toggle`, `get-status`, `get-config`, `reboot`, `refresh-discovery` |
 | `garadget/Garage/set-config` | Subscribe | JSON object or pipe-delimited `key=val\|key=val` |
 | `garadget/Garage/set-threshold` | Subscribe | Integer `1`–`80` |
+| `garadget/Garage/set-stealth` | Subscribe | `ON` / `OFF` (Home Assistant Stealth Mode switch) |
+| `garadget/Garage/set-led-brightness` | Subscribe | Integer `0`–`100` (Home Assistant LED Brightness slider) |
 | `homeassistant/status` | Subscribe | Re-publishes discovery on HA `online` birth message |
 
-**Auto-discovered Home Assistant entities:** Garage Door (`cover`), Reflection (`sensor`), Ambient Brightness (`sensor`), Wi-Fi Signal (`sensor`), Time in State (`sensor`), Last Alert (`sensor`), Sensor Threshold (`number`), and Reboot (`button`).
+**Auto-discovered Home Assistant entities:** Garage Door (`cover`), Reflection (`sensor`), Ambient Brightness (`sensor`), Wi-Fi Signal (`sensor`), Time in State (`sensor`), Last Alert (`sensor`), Sensor Threshold (`number`), Stealth Mode (`switch`), LED Brightness (`number`), and Reboot (`button`).
 
 </details>
 

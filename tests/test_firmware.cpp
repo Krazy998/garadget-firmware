@@ -390,6 +390,20 @@ void testMqttAndHaDiscovery() {
     assert(std::strstr(payload, "\"dev_cla\":\"garage\"") != nullptr);
     assert(std::strstr(payload, "\"cu\":\"http://192.168.1.77/\"") != nullptr);
     assert(std::strstr(payload, "\"stat_stopped\":\"stopped\"") != nullptr);
+
+    // Verify Stealth Mode Switch (index 8) & LED Brightness Number (index 9)
+    assert(HaMqttBridge::buildDiscoveryPayload(
+        8, cfgMgr.data(), "1a2b3c4d", "Garage", "192.168.1.77",
+        topic, sizeof(topic), payload, sizeof(payload)));
+    assert(std::strcmp(topic, "homeassistant/switch/1a2b3c4d_stealth/config") == 0);
+    assert(std::strstr(payload, "\"cmd_t\":\"garadget/Garage/set-stealth\"") != nullptr);
+    assert(std::strstr(payload, "\"pl_on\":\"ON\"") != nullptr);
+
+    assert(HaMqttBridge::buildDiscoveryPayload(
+        9, cfgMgr.data(), "1a2b3c4d", "Garage", "192.168.1.77",
+        topic, sizeof(topic), payload, sizeof(payload)));
+    assert(std::strcmp(topic, "homeassistant/number/1a2b3c4d_led_brightness/config") == 0);
+    assert(std::strstr(payload, "\"cmd_t\":\"garadget/Garage/set-led-brightness\"") != nullptr);
 }
 
 void testOtaValidator() {
@@ -539,10 +553,37 @@ void testHttpSecurityAndAcl() {
 
     ConfigManager migrated;
     assert(migrated.load(migStorage));
-    assert(migrated.data().schemaVersion == 3);
+    assert(migrated.data().schemaVersion == 4);
     assert(std::strcmp(migrated.data().deviceName, "Workshop") == 0);
     assert(migrated.data().sensorThreshold == 33);
     assert(migrated.data().ipMode == 0);
+    assert(migrated.data().ledStealth == 0);
+    assert(migrated.data().ledBrightness == 100);
+
+    // 8. LED Stealth Mode & Brightness validation + v3 -> v4 migration
+    assert(migrated.setParam("leds", "ON") == 1 && migrated.data().ledStealth == 1);
+    assert(migrated.setParam("leds", "OFF") == 1 && migrated.data().ledStealth == 0);
+    assert(migrated.setParam("leds", "maybe") == -1);
+    assert(migrated.setParam("ledb", "25") == 1 && migrated.data().ledBrightness == 25);
+    assert(migrated.setParam("ledb", "101") == -1);
+    assert(migrated.setParam("ledb", "-5") == -1);
+
+    // Simulate schema v3 EEPROM blob -> migrates seamlessly to v4 preserving Static IP
+    MemStorage v3Storage;
+    DeviceConfig v3 = cfg.data();
+    v3.schemaVersion = 3;
+    v3.ledStealth = 0;
+    v3.ledBrightness = 0;
+    v3.crc32 = ConfigManager::computeCrc32(&v3, offsetof(DeviceConfig, crc32));
+    v3Storage.write(&v3, sizeof(v3));
+
+    ConfigManager migV3;
+    assert(migV3.load(v3Storage));
+    assert(migV3.data().schemaVersion == 4);
+    assert(migV3.data().ipMode == 1);
+    assert(migV3.data().staticIp[3] == 20);
+    assert(migV3.data().ledStealth == 0);
+    assert(migV3.data().ledBrightness == 100);
 }
 
 } // namespace

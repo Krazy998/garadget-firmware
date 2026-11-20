@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.2.0] - 2026-11-20
+
+### Added
+- **RGB LED Dimming & Stealth Mode**: Control status LED brightness (`0–100%`, `ledb`) and **Stealth Mode** (`leds`, completely turns off the status LED for dark garages) from the Web UI (**System** tab) or Home Assistant. LED brightness automatically restores during SoftAP setup mode so the blinking setup indicator stays visible.
+- **Home Assistant Auto-Discovered LED Entities**: Automatically discovers a **Stealth Mode** `switch` (`garadget/<topic>/set-stealth`) and **LED Brightness** `number` slider (`garadget/<topic>/set-led-brightness`) under the Garadget P1 device, applying changes instantaneously without reconnecting MQTT.
+- **Config Backup & Restore**: One-click **Export Config (.json)** (passwords safely omitted) and **Import Config (.json)** in the LAN Web UI (**System** tab).
+- **Seamless EEPROM Schema Migration (v3 → v4)**: Preserves all existing v3.x settings (including Static IP & DNS) on OTA upgrade.
+
+---
+
 ## [3.1.0] - 2026-11-20
 
 ### Added
@@ -45,5 +55,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed (vs. Legacy Garadget v1.26)
 - Eliminated `sprintf` buffer overflows, MQTT heap leaks on config reload, infinite blocking TCP socket reads, unsigned integer underflow in laser reflection math, and unverified EEPROM config loads (now CRC32-protected with 60s `ApplicationWatchdog` and boot-safe `PIN_RELAY` LOW).
 
+[3.2.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/Krazy998/garadget-firmware/releases/tag/v3.0.0

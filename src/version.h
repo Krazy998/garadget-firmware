@@ -9,9 +9,9 @@
 namespace garadget {
 
 inline constexpr uint8_t kFirmwareMajor = 3;
-inline constexpr uint8_t kFirmwareMinor = 1;
+inline constexpr uint8_t kFirmwareMinor = 2;
 inline constexpr uint8_t kFirmwarePatch = 0;
-inline constexpr const char* kFirmwareVersion = "3.1.0";
+inline constexpr const char* kFirmwareVersion = "3.2.0";
 inline constexpr const char* kModelName = "Garadget P1";
 inline constexpr const char* kManufacturer = "Garadget";
 
