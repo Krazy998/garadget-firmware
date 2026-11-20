@@ -1,149 +1,216 @@
-# Garadget Local Firmware (v3.0.0)
+# Garadget Local Firmware
 
-A complete, modern, **100% local and cloud-free** C++17 rewrite of the firmware for the **Garadget** garage door controller (**Particle P1** hardware — STM32F205RGY6 + BCM43362 Wi-Fi), targeting **Particle Device OS 3.3.1** (the latest and most modern Device OS supported on Particle P1).
+[![Build & Test](https://github.com/Krazy998/garadget-firmware/actions/workflows/build.yml/badge.svg)](https://github.com/Krazy998/garadget-firmware/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/Krazy998/garadget-firmware)](https://github.com/Krazy998/garadget-firmware/releases)
+[![Device OS](https://img.shields.io/badge/Particle%20Device%20OS-3.3.1%20(P1)-00adef)](https://github.com/particle-iot/device-os/releases/tag/v3.3.1)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
----
-
-## Highlights & Improvements Over Original v1.26
-
-- **Zero Cloud Lock-In**: Completely removes Particle Cloud (`Particle.connect()`, `PRODUCT_ID`, `Particle.publish/variable/function`, `spark/`). Runs in `SYSTEM_MODE(MANUAL)` + `SYSTEM_THREAD(ENABLED)` so Wi-Fi/network operations never block door safety logic.
-- **Most Modern Supported OS**: Built natively for **Particle Device OS 3.3.1** (`PLATFORM=p1`, Platform ID 8 — Device OS 4.x+ dropped Gen 2 STM32 hardware).
-- **Local Web OTA Firmware Updates**: Upload new `.bin` builds directly in the Web UI (**System** tab) or via `make ota HOST=<ip>` (`POST /api/ota`). Streams safely to the P1's dedicated OTA staging slot and validates Particle P1 header, Platform ID, and full IEEE 802.3 CRC32 before rebooting.
-- **Modern LAN Management Web UI (`http://<device-ip>/`)**:
-  - Zero external CDN dependencies (gzip-embedded in flash, ~7.5 KB).
-  - Live animated garage door state, Open / Stop / Close controls, live laser reflection meter with visual threshold marker, ambient brightness, Wi-Fi RSSI, and recent alerts.
-  - Full configuration UI (Door & Sensor, MQTT & Home Assistant, Alerts & Time, System & Optional LAN Password), dark/light theme, and REST JSON API.
-- **Native Home Assistant Auto-Discovery + MQTT 3.1.1**:
-  - Automatic MQTT Discovery for **Garage Door Cover** (5 states: `open`, `closed`, `opening`, `closing`, `stopped`), **Laser Reflection %**, **Ambient Brightness %**, **Wi-Fi Signal dBm**, **Time in State**, **Last Alert**, **Sensor Threshold** (`number`), and **Reboot** (`button`), plus direct `configuration_url` link to the Web UI and automatic refresh on Home Assistant birth (`homeassistant/status` = `online`).
-  - Supports both **IPv4 addresses and DNS hostnames** (e.g. `mqtt.lan` or `192.168.1.10`).
-  - Backwards-compatible with original `garadget/<topic>/{status,command,config,set-config,LWT}` topics plus `garadget/<topic>/alert`.
-- **Full Feature Parity + Hardware & Safety Fixes**:
-  - Retains optical laser reflection sensing (`D2`/`A0`), dry-contact switch support (`D0` — now runtime-selectable between Laser, Switch NO, and Switch NC), multi-click relay state machine (`D3`), open timeout alerts (`aot`), night-time alerts (`ans`/`ane`), event alert bitmap (`aev`), and SoftAP Wi-Fi provisioning (`192.168.0.1`).
-  - **Local SNTP Client (UDP/123)**: Syncs time directly over the network without Particle Cloud so night-time alerts and DST transitions work offline from Particle.
-  - **Fixes legacy bugs**: Southern Hemisphere DST support, signed-safe laser reflection math (no unsigned underflow in bright sunlight), zero heap leaks in MQTT, non-blocking incremental MQTT parser (no infinite socket read lockups), CRC32-verified EEPROM config, proper RFC 8259 JSON escaping, `ApplicationWatchdog` (60s auto-recovery), boot-safe relay LOW initialization, and redacted secrets in config output.
+A complete, **100% local and cloud-free** C++17 firmware rewrite for the **Garadget** garage door controller (Particle P1), running on **Particle Device OS 3.3.1** with a built-in Web UI, Home Assistant auto-discovery, MQTT, and wireless Local Web OTA updates.
 
 ---
 
-## Hardware Pinout (Original Garadget P1)
+## Features
 
-| Pin | Function |
-| --- | --- |
-| `D2` | Laser emitter control (pulsed HIGH for 1 ms during optical scan) |
-| `A0` | Phototransistor analog input (12-bit ADC, inverted brightness) |
-| `D3` | Relay driver (HIGH = button pressed; forced LOW on boot) |
-| `D0` | Optional dry-contact reed/limit switch (`INPUT_PULLUP` when Switch NO/NC mode selected) |
-| `MODE` button | Hold 3s = enter SoftAP Wi-Fi Setup (`192.168.0.1`); Hold 10s = Factory Reset |
+- **100% Cloudless** — Removes all Particle Cloud and Garadget Cloud dependencies. Runs purely on your local Wi-Fi network.
+- **Built-in Modern Web UI** — Responsive dark/light dashboard hosted directly on the device (`http://<device-ip>/`) with live door animation, Open/Stop/Close buttons, real-time laser reflection meter, and full configuration.
+- **Home Assistant Auto-Discovery & MQTT 3.1.1** — Automatically creates a **Garadget P1** device in Home Assistant (5-state garage cover, laser reflection, brightness, Wi-Fi signal, time in state, alerts, threshold slider, and reboot button) while keeping backwards-compatible `garadget/<name>/...` MQTT topics.
+- **Wireless Local Web OTA** — Upload future `.bin` updates right from your browser or `make ota` with built-in P1 header and CRC32 validation.
+- **Original Hardware & Logic Preserved** — Keeps Garadget's laser optical sensor (`D2`/`A0`), multi-click relay controller (`D3`), dry-contact switch option (`D0`, now runtime-selectable), SoftAP Wi-Fi setup (`192.168.0.1`), and local SNTP time/DST alerts — with safety fixes and a 60s hardware watchdog.
 
 ---
 
-## Building Locally (Offline, No Particle Cloud Required)
+## Quick Install (USB — First Time Only)
 
-### Prerequisites
-- Linux with `make`, `git`, `curl`, `python3`, `xxd`, `g++` (for unit tests), and `dfu-util` (for USB flashing).
+You only need USB once to upgrade the P1 bootloader + Device OS to **3.3.1** and flash the initial firmware. All future updates can be uploaded wirelessly via **Local Web OTA**.
 
-### 1. Download Local Toolchain (One-Time)
-Downloads official **Particle Device OS v3.3.1**, prebuilt P1 OS 3.3.1 system images, and **GNU Arm Embedded Toolchain 10.2.1** into `.toolchain/` (gitignored):
+### 1. Install USB Flashing Tools (Ubuntu / Debian Example)
+
+No Particle account or login is required — `particle flash --local` works completely offline over USB.
 
 ```bash
-make toolchain
+# Install dfu-util and curl
+sudo apt update && sudo apt install -y dfu-util curl
+
+# Install the Particle CLI (includes local USB/DFU flashing support)
+bash <(curl -sL https://particle.io/install-cli)
+export PATH="$HOME/bin:$PATH"   # or restart your terminal
+
+# Configure Linux USB permissions (udev rules) for Particle P1
+sudo particle usb configure
 ```
 
-### 2. Run Unit Tests (Host C++17)
-Runs native unit tests covering the door/relay state machine, laser math safety, rollover-safe timers, Northern & Southern Hemisphere DST, CRC32 config persistence, alert engine, JSON utilities, and Home Assistant discovery payloads:
+> **Note:** On macOS use `brew install dfu-util` + the same `particle.io/install-cli` command. On Windows use the [Particle CLI installer](https://binaries.particle.io/cli/installer/windows/ParticleCLIInstaller.exe). If you skip `particle usb configure` on Linux, just prefix the `particle flash` commands below with `sudo`.
+
+### 2. Download the Release Binaries
+
+Download all 4 `.bin` files from the latest [**GitHub Release**](https://github.com/Krazy998/garadget-firmware/releases) into a folder:
+- `p1-bootloader@3.3.1+lto.bin`
+- `p1-system-part1@3.3.1.bin`
+- `p1-system-part2@3.3.1.bin`
+- `garadget.bin`
+
+### 3. Flash Bootloader, Device OS 3.3.1 & Firmware
+
+Connect your Garadget with a **micro-USB data cable** (not a charge-only cable):
 
 ```bash
-make test
+# Step A — Bootloader (required if upgrading from Device OS < 2.0)
+# Hold the M button on Garadget for ~3s until the LED blinks DARK BLUE (Listening Mode), then run:
+particle flash --local p1-bootloader@3.3.1+lto.bin
+
+# Step B — Device OS 3.3.1 system parts + Garadget Local firmware
+# particle flash --local automatically puts the P1 into DFU mode (blinking yellow) for each file:
+particle flash --local p1-system-part1@3.3.1.bin
+particle flash --local p1-system-part2@3.3.1.bin
+particle flash --local garadget.bin
 ```
 
-### 3. Build P1 Firmware
-Embeds the gzipped Web UI + SoftAP portal and compiles `target/garadget.bin` (Device OS 3.3.1, Platform 8 / P1):
-
-```bash
-make firmware
-```
-
-Output binary: `target/garadget.bin` (~86 KB, comfortably inside the P1's 128 KB user slot).
+> **Troubleshooting:** If any command in Step B says no device was found, manually put the Garadget into **DFU Mode** (hold **`M`** + **`R`**, release **`R`**, keep holding **`M`** until the LED blinks **yellow**), then re-run that command.
 
 ---
 
-## Flashing to Your Garadget Device
+## Setup & Usage
 
-### First-Time Flash Over USB (`particle flash --local`)
-1. Connect Garadget via a micro-USB data cable.
-2. Flash the Device OS 3.3.1 bootloader (required if upgrading from OS < 2.0 — put device in Listening Mode by holding `M` for 3s until blinking dark blue):
-   ```bash
-   particle flash --local .toolchain/device-os-bins/3.3.1/p1-bootloader@3.3.1+lto.bin
-   ```
-3. Flash Device OS 3.3.1 system parts and the new firmware:
-   ```bash
-   particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part1@3.3.1.bin
-   particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part2@3.3.1.bin
-   particle flash --local target/garadget.bin
-   ```
+1. **Connect to Wi-Fi**: If no Wi-Fi is saved (or hold **`M`** for 3s until the LED blinks **dark blue**), join the `Photon-XXXX` hotspot and open **`http://192.168.0.1/`** to enter your Wi-Fi and optional MQTT settings.
+2. **Open the Web UI**: Find the device's IP in your router (or type `status` over USB serial at `115200` baud) and visit **`http://<garadget-ip>/`**.
+3. **Connect Home Assistant**: In the **MQTT & HA** tab, enter your broker host/IP and credentials. The device appears automatically under **Settings → Devices & Services → MQTT** with a direct **Visit** link to the Web UI.
+4. **Calibrate**: Use the live **Reflection %** meter on the Dashboard to set **Reflection Threshold (`srt`)** between your open and closed readings, and match **Door Motion Time (`mtt`)** to your door's travel time.
 
-### Subsequent Wireless Updates (Local Web OTA — No USB Needed!)
-- **From your browser**: Open `http://<garadget-ip>/` → **System** tab → select `target/garadget.bin` → click **Upload & Flash Firmware**.
-- **From your terminal**:
+---
+
+## Wireless Updates (Local Web OTA)
+
+- **Browser**: Open `http://<garadget-ip>/` → **System** tab → select `garadget.bin` → **Upload & Flash Firmware**.
+- **Terminal**:
   ```bash
   make ota HOST=192.168.1.50
-  # Or if you configured a Web UI admin password:
+  # If a Web UI admin password is set:
   make ota HOST=192.168.1.50 PASS=yourpassword
   ```
 
----
-
-## First-Time Setup
-
-1. If no Wi-Fi credentials are stored (or after holding the **`M`** button for 3 seconds), Garadget enters **SoftAP Setup Mode** (blinking dark blue LED) and creates a Wi-Fi hotspot (`Photon-XXXX` / `Garadget-XXXX`).
-2. Connect your phone or computer to that hotspot and open **`http://192.168.0.1/`**.
-3. Select your Wi-Fi network, enter your Wi-Fi password, optionally set your Device Name & MQTT broker, and click **Save & Connect**.
-4. Once connected to your router, open **`http://<garadget-ip>/`** from any browser on your LAN to manage the door, tune laser reflection threshold live, configure MQTT/Home Assistant, and set timezone/alerts.
+Updates stream into the P1's dedicated OTA staging slot and validate the Particle P1 platform ID, flash bounds, and IEEE 802.3 CRC32 before rebooting.
 
 ---
 
-## MQTT & Home Assistant Reference
+## Reference & Developer Docs
 
-Assuming Device Name `Garage` (topic slug `Garage`):
+<details>
+<summary><strong>Building from Source & Local Toolchain Setup (Ubuntu / Linux, 100% Offline)</strong></summary>
 
-| Topic | Direction | Description |
+This repository includes a self-contained offline toolchain installer (`scripts/setup-toolchain.sh`) that fetches **Particle Device OS v3.3.1**, the official P1 Device OS 3.3.1 `.bin` files (bootloader + system parts), and **GNU Arm Embedded Toolchain 10.2.1** into `.toolchain/` (gitignored) — no Particle Workbench or Particle Cloud login needed.
+
+### 1. Install Ubuntu Build Prerequisites
+```bash
+sudo apt update && sudo apt install -y build-essential git curl python3 xxd dfu-util
+```
+
+### 2. Clone & Download the Local Particle Toolchain
+```bash
+git clone https://github.com/Krazy998/garadget-firmware.git
+cd garadget-firmware
+
+# Downloads Device OS 3.3.1 source, P1 OS 3.3.1 binaries, and GCC ARM 10.2.1 into .toolchain/
+make toolchain
+```
+
+After `make toolchain` finishes, you'll have:
+- `.toolchain/deviceOS/3.3.1/` — Particle Device OS 3.3.1 SDK & build system
+- `.toolchain/gcc-arm/10.2.1/` — `arm-none-eabi-gcc` 10.2.1 cross-compiler
+- `.toolchain/device-os-bins/3.3.1/` — `p1-bootloader@3.3.1+lto.bin`, `p1-system-part1@3.3.1.bin`, `p1-system-part2@3.3.1.bin`
+
+### 3. Test & Compile
+```bash
+# Run native C++17 host unit tests
+make test
+
+# Embed gzipped Web UI & compile target/garadget.bin (~90 KB / 128 KB P1 user slot)
+make firmware
+```
+
+### 4. Flash Directly from the Repo
+```bash
+# First-time OS upgrade + firmware flash via Particle CLI
+particle flash --local .toolchain/device-os-bins/3.3.1/p1-bootloader@3.3.1+lto.bin
+particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part1@3.3.1.bin
+particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part2@3.3.1.bin
+particle flash --local target/garadget.bin
+
+# Or raw dfu-util (device in DFU blinking-yellow mode; bootloader still requires Listening Mode)
+make flash-os
+make flash
+```
+
+</details>
+
+<details>
+<summary><strong>MQTT Topics & Home Assistant Discovery</strong></summary>
+
+Default topic root for Device Name `Garage`:
+
+| Topic | Direction | Payload |
 | --- | --- | --- |
 | `garadget/Garage/LWT` | Publish (retained) | `Online` / `Offline` |
-| `garadget/Garage/status` | Publish (retained) | JSON: `{"status":"closed","time":"5m","sensor":84,"bright":40,"signal":-58,"ip":"192.168.1.50"}` |
-| `garadget/Garage/config` | Publish (retained) | Safe JSON configuration (passwords redacted) |
-| `garadget/Garage/alert` | Publish | JSON: `{"name":"Garage","type":"timeout","data":"20m"}` |
+| `garadget/Garage/status` | Publish (retained) | `{"status":"closed","time":"5m","sensor":84,"bright":40,"signal":-58,"ip":"192.168.1.50"}` |
+| `garadget/Garage/config` | Publish (retained) | JSON config (passwords redacted) |
+| `garadget/Garage/alert` | Publish | `{"name":"Garage","type":"timeout","data":"20m"}` |
 | `garadget/Garage/command` | Subscribe | `open`, `close`, `stop`, `toggle`, `get-status`, `get-config`, `reboot`, `refresh-discovery` |
-| `garadget/Garage/set-config` | Subscribe | JSON object or legacy pipe-delimited `key=val\|key=val` |
-| `garadget/Garage/set-threshold` | Subscribe | Numeric `1`–`80` (used by Home Assistant threshold entity) |
-| `homeassistant/status` | Subscribe | Listens for `online` birth message to republish discovery |
+| `garadget/Garage/set-config` | Subscribe | JSON object or pipe-delimited `key=val\|key=val` |
+| `garadget/Garage/set-threshold` | Subscribe | Integer `1`–`80` |
+| `homeassistant/status` | Subscribe | Re-publishes discovery on HA `online` birth message |
 
-When **Home Assistant Auto-Discovery** is enabled (default), the device automatically appears under **Settings → Devices & Services → MQTT** as **Garadget P1** with a Cover entity, diagnostic sensors, threshold control, reboot button, and a direct **Visit** link to the local Web UI.
+**Auto-discovered Home Assistant entities:** Garage Door (`cover`), Reflection (`sensor`), Ambient Brightness (`sensor`), Wi-Fi Signal (`sensor`), Time in State (`sensor`), Last Alert (`sensor`), Sensor Threshold (`number`), and Reboot (`button`).
 
----
+</details>
 
-## Local REST API (`http://<device-ip>`)
+<details>
+<summary><strong>Local REST API & USB Serial CLI</strong></summary>
 
-- `GET /` — Modern gzipped Web UI
-- `GET /api/status` — Live door, sensor, Wi-Fi, MQTT, NTP, memory, and alert history JSON
-- `GET /api/config` — Current configuration JSON (passwords masked)
-- `POST /api/config` — Update configuration fields (JSON body)
-- `POST /api/command` — Execute door command: `{"command":"open|close|stop|toggle"}`
-- `POST /api/system` — Execute action: `{"action":"scan|sync-time|ha-rediscover|wifi-setup|reboot|factory-reset"}`
-- `POST /api/ota` — Stream raw `garadget.bin` firmware binary (`Content-Type: application/octet-stream`) for validated local OTA flashing
-
+### REST API (`http://<garadget-ip>`)
 If an Admin Password (`apass`) is configured, include header `X-Auth-Token: <password>` on `/api/*` requests.
 
----
+| Method & Path | Description |
+| --- | --- |
+| `GET /` | Gzipped Web UI dashboard |
+| `GET /api/status` | Live door state, sensor readings, network, MQTT, NTP, memory & alert history |
+| `GET /api/config` | Current configuration JSON (passwords masked as boolean flags) |
+| `POST /api/config` | Update configuration parameters (JSON body) |
+| `POST /api/command` | Execute door command: `{"command":"open\|close\|stop\|toggle"}` |
+| `POST /api/system` | Execute action: `{"action":"scan\|sync-time\|ha-rediscover\|wifi-setup\|reboot\|factory-reset"}` |
+| `POST /api/ota` | Stream raw `garadget.bin` (`application/octet-stream`) for validated local OTA flash |
 
-## USB Serial CLI (115200 baud)
-
-Connect over USB serial for local diagnostics or configuration:
+### USB Serial CLI (`115200` baud)
 `help` · `status` · `config` · `set key=val|k=v` · `open` · `close` · `stop` · `toggle` · `scan` · `wifi-setup` · `reboot` · `factory-reset`
+
+</details>
+
+<details>
+<summary><strong>Hardware Pinout & Physical Button</strong></summary>
+
+| Pin | Function |
+| --- | --- |
+| `D2` | Laser emitter (1 ms pulse during optical scan) |
+| `A0` | Phototransistor analog input (12-bit ADC) |
+| `D3` | Relay driver (forced `LOW` on boot) |
+| `D0` | Optional dry-contact reed/limit switch (`INPUT_PULLUP` in Switch NO/NC mode) |
+| `M` button | Hold **3s** = SoftAP Wi-Fi Setup (`192.168.0.1`) · Hold **10s** = Factory Reset |
+
+</details>
+
+<details>
+<summary><strong>Key Reliability & Safety Improvements Over Original v1.26</strong></summary>
+
+- `SYSTEM_MODE(MANUAL)` + `SYSTEM_THREAD(ENABLED)` + 60s `ApplicationWatchdog` so network hiccups never stall door sensing or relay timing.
+- Local UDP SNTP client (`pool.ntp.org` by default, or any LAN NTP IP) replaces Particle Cloud time sync, with fixed Southern Hemisphere DST support.
+- Signed, clamped laser reflection math fixes unsigned underflow in bright sunlight and honors configurable sample averaging (`srr`).
+- Zero-heap static-buffer MQTT 3.1.1 client with non-blocking incremental parser (fixes memory leaks and socket-hang lockups) and DNS hostname support.
+- IEEE 802.3 CRC32-verified EEPROM config with schema versioning and redacted secrets in JSON responses.
+
+</details>
 
 ---
 
 ## Credits & License
 
-- **Original Hardware & Firmware**: Based on the [Garadget](https://github.com/Garadget/firmware) project by Denis Grisak. This is an independent, unofficial, cloud-free rewrite.
-- **SoftAP RSA Client**: Uses Tom Wu's BSD-licensed `jsbn` RSA library (`web/softap/rsa-utils/`) for Particle P1 SoftAP credential encryption.
-- **License**: GNU General Public License v3.0 (see [LICENSE](LICENSE)).
-
+- **Original Project**: Based on [Garadget/firmware](https://github.com/Garadget/firmware) by Denis Grisak. This is an independent, unofficial, cloud-free rewrite.
+- **SoftAP RSA**: Uses Tom Wu's BSD-licensed `jsbn` RSA library (`web/softap/rsa-utils/`) for Particle P1 SoftAP Wi-Fi credential encryption.
+- **License**: GNU General Public License v3.0 — see [LICENSE](LICENSE).
