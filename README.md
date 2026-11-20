@@ -7,6 +7,10 @@
 
 A complete, **100% local and cloud-free** C++17 firmware rewrite for the **Garadget** garage door controller (Particle P1), running on **Particle Device OS 3.3.1** with a built-in Web UI, Home Assistant auto-discovery, MQTT, and wireless Local Web OTA updates.
 
+<p align="center">
+  <img src="docs/Garadget_GUI.png" alt="Garadget Local Web UI" width="760">
+</p>
+
 ---
 
 ## Features
