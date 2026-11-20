@@ -1,120 +1,149 @@
-# Firmware
-Garadget is the garage door "futurizer". It allows to monitor and operate your existing garage doors from smartphones, wearables and other devices. It's inexpensive, easy to install and developer friendly. For more information please visit http://www.garadget.com
+# Garadget Local Firmware (v3.0.0)
 
-The code in this repository is for the program that controls Garaget's hardware. It's C++ application similar to those created for popular Arduino boards. You are encouraged to study it, report the problems, modify it, try it with your Garadget and share.
+A complete, modern, **100% local and cloud-free** C++17 rewrite of the firmware for the **Garadget** garage door controller (**Particle P1** hardware — STM32F205RGY6 + BCM43362 Wi-Fi), targeting **Particle Device OS 3.3.1** (the latest and most modern Device OS supported on Particle P1).
 
-## Particle Platform
-At the core of the device is Particle Photon P1 module allowing Garadget to benefit from:
-- [powerful hardware](https://docs.particle.io/datasheets/p1-datasheet/#features)
-- [feature rich firmware libraries](https://docs.particle.io/reference/firmware/photon/)
-- LAN and Internet connectivity
-- [numerous developer resources](https://docs.particle.io/guide/tools-and-features/dev/)
+---
 
-## Communication Protocol
-Garadget communicates with the clients via Particle cloud by
-- [exposing variables](https://docs.particle.io/reference/firmware/photon/#particle-variable-) to report status and configuration
-- [accepting function calls](https://docs.particle.io/reference/firmware/photon/#particle-function-) to change status and update configuration
-- [publishing events](https://docs.particle.io/reference/firmware/photon/#particle-publish-) to report status changes and send alerts
+## Highlights & Improvements Over Original v1.26
 
-### Variable: doorStatus
-String `status=%s|time=%u%c|sensor=%u|signal=%d` where
-- `status` - is current status of the door such as `open`, `closed` etc
-- `time` - time in that status 0-119s, 2-119m, 2-47h, 2+d
-- `sensor` is the sensor reflection rate 0-100
-- `base` raw photo-sensor reading 0-4095 (12 bit)
-- `signal` is WiFi signal strength in dB
+- **Zero Cloud Lock-In**: Completely removes Particle Cloud (`Particle.connect()`, `PRODUCT_ID`, `Particle.publish/variable/function`, `spark/`). Runs in `SYSTEM_MODE(MANUAL)` + `SYSTEM_THREAD(ENABLED)` so Wi-Fi/network operations never block door safety logic.
+- **Most Modern Supported OS**: Built natively for **Particle Device OS 3.3.1** (`PLATFORM=p1`, Platform ID 8 — Device OS 4.x+ dropped Gen 2 STM32 hardware).
+- **Local Web OTA Firmware Updates**: Upload new `.bin` builds directly in the Web UI (**System** tab) or via `make ota HOST=<ip>` (`POST /api/ota`). Streams safely to the P1's dedicated OTA staging slot and validates Particle P1 header, Platform ID, and full IEEE 802.3 CRC32 before rebooting.
+- **Modern LAN Management Web UI (`http://<device-ip>/`)**:
+  - Zero external CDN dependencies (gzip-embedded in flash, ~7.5 KB).
+  - Live animated garage door state, Open / Stop / Close controls, live laser reflection meter with visual threshold marker, ambient brightness, Wi-Fi RSSI, and recent alerts.
+  - Full configuration UI (Door & Sensor, MQTT & Home Assistant, Alerts & Time, System & Optional LAN Password), dark/light theme, and REST JSON API.
+- **Native Home Assistant Auto-Discovery + MQTT 3.1.1**:
+  - Automatic MQTT Discovery for **Garage Door Cover** (5 states: `open`, `closed`, `opening`, `closing`, `stopped`), **Laser Reflection %**, **Ambient Brightness %**, **Wi-Fi Signal dBm**, **Time in State**, **Last Alert**, **Sensor Threshold** (`number`), and **Reboot** (`button`), plus direct `configuration_url` link to the Web UI and automatic refresh on Home Assistant birth (`homeassistant/status` = `online`).
+  - Supports both **IPv4 addresses and DNS hostnames** (e.g. `mqtt.lan` or `192.168.1.10`).
+  - Backwards-compatible with original `garadget/<topic>/{status,command,config,set-config,LWT}` topics plus `garadget/<topic>/alert`.
+- **Full Feature Parity + Hardware & Safety Fixes**:
+  - Retains optical laser reflection sensing (`D2`/`A0`), dry-contact switch support (`D0` — now runtime-selectable between Laser, Switch NO, and Switch NC), multi-click relay state machine (`D3`), open timeout alerts (`aot`), night-time alerts (`ans`/`ane`), event alert bitmap (`aev`), and SoftAP Wi-Fi provisioning (`192.168.0.1`).
+  - **Local SNTP Client (UDP/123)**: Syncs time directly over the network without Particle Cloud so night-time alerts and DST transitions work offline from Particle.
+  - **Fixes legacy bugs**: Southern Hemisphere DST support, signed-safe laser reflection math (no unsigned underflow in bright sunlight), zero heap leaks in MQTT, non-blocking incremental MQTT parser (no infinite socket read lockups), CRC32-verified EEPROM config, proper RFC 8259 JSON escaping, `ApplicationWatchdog` (60s auto-recovery), boot-safe relay LOW initialization, and redacted secrets in config output.
 
-#### Door states (`status`)
-- `closed`
-- `open`
-- `closing`
-- `opening`
-- `stopped`
+---
 
-### Variable: doorConfig
-String `sys=%d.%d.%d|ver=%d.%d|cnt=%d|rdt=%d|mtt=%d|mot=%d|rlt=%d|rlp=%d|srr=%d|srt=%d|aev=%d|aot=%d|ans=%d|ane=%d|nme=%s` containing pipe separated value for firmware version and timing parameters (all numeric):
-- `ver` - firmware version, dot separated major and minor (e.g 1.15)
-- `sys` - system version, dot separated major, minor, patch (e.g 0.6.2)
-- `rdt` - sensor scan interval in mS (200-60,000, default 1,000)
-- `mtt` - door moving time in mS from completely opened to completely closed (1,000 - 120,000, default 10,000)
-- `rlt` - button press time mS, time for relay to keep contacts closed (10-2,000, default 300)
-- `rlp` - delay between consecutive button presses in mS (10-5,000 default 1,000)
-- `srr` - number of sensor reads used in averaging (1-20, default 3)
-- `srt` - reflection threshold below which the door is considered open (1-80, default 25)
-- `aev` - number serving as bitmap for enabling status alerts. See details below.
-- `aot` - alert for open timeout in seconds (0 disables, default 1,200 - 20min)
-- `ans` - alert for night time start in minutes from midnight (same value as ane disables, default 1320 - 10pm)
-- `ane` - alert for night time end in minutes from midnight (same value as ans disables, default 360 - 6am)
-- `tzo` - time zone offset or daylight savings time (DST) rule for the region. See details below.
-- `nme` - device name to be used in notifications. At reboot this value will be overwritten with the device name configured in Particle cloud. Update this value to notify the unit about the name change without reboot.
-- `mqon` - MQTT/Cloud enabled flags
-- `mqip` - MQTT server IP address
-- `mqpt` - MQTT server port
-- `mqto` - MQTT server reconnect timeout
+## Hardware Pinout (Original Garadget P1)
 
-The order of the configuration values in the string is not guaranteed.
+| Pin | Function |
+| --- | --- |
+| `D2` | Laser emitter control (pulsed HIGH for 1 ms during optical scan) |
+| `A0` | Phototransistor analog input (12-bit ADC, inverted brightness) |
+| `D3` | Relay driver (HIGH = button pressed; forced LOW on boot) |
+| `D0` | Optional dry-contact reed/limit switch (`INPUT_PULLUP` when Switch NO/NC mode selected) |
+| `MODE` button | Hold 3s = enter SoftAP Wi-Fi Setup (`192.168.0.1`); Hold 10s = Factory Reset |
 
-#### Status alerts bitmap (`aev`)
-Bitmap values for `aev` parameter are:
-- 0 - closed (adds 1)
-- 1 - open (adds 2)
-- 2 - closing (adds 4)
-- 3 - opening (adds 8)
-- 4 - stopped (adds 16)
-- 5 - init (adds 32)
-- 6 - online (adds 64)
-- 7 - offline (adds 128)
-- 8 - config (adds 256)
+---
 
-For example if we want to receive notifications about device opening, stopped and going offline, the value is 2^3 + 2^4 + 2^7 = 8 + 16 + 128 = 152. To determine if particular bit is set, use binary AND operation against the value of the bit. E.g. the condition for checking bit for `opening` is `if (value & 8)`.
+## Building Locally (Offline, No Particle Cloud Required)
 
-#### Time zone configuration parameter (`tzo`)
-- For areas without daylight savings time: float number for hours offset from UTC. Example `-7` or `-7.00`.
-- If multiple regions have the same offset from UTC, additional character can be added at the end to help UI resolve ambiguity. Example: Region `ABC` is at the same UTC-7.00 offset as region `XYZ`. To correctly indicate current selection in UI, region `ABC` is assigned value `-7.00A` and region `XYZ` is assigned value `-7.00X`. The distinguishing character at the end is ignored by Garadget.
-- For areas with daylight savings time: comma separated DST rules - first for the beginning of the standard time, second for the beginning of daylight savings time. DST rules are formatted as follows: 1 digit week number (0-last, 1-first, 2-second, 3-third, 4-forth), 1 digit week day (0-Sunday, 1-Monday, 2-Tuesday, etc.), 2 digit month number (1-January, 2-February, 3-March, etc.), 1 digit hour (0-for midnight, 1-1am etc), float number for hours offset from UTC. Example: In Colorado Mountain Standard Time (MST, UTC-7) starts on 1st Sunday in November at 2am, and Mountain Daylight Time (MDT, UTC-6) starts on 2nd Sunday in March at 2am. The value for Colorado is `10112-7.00,20032-6.00`
-- If multiple regions have the same DST rules then additional character can be added comma separated at the end to help UI resolve ambiguity. Example: `10112-7.00,20032-6.00,A` for one and `10112-7.00,20032-6.00,B` for another.
+### Prerequisites
+- Linux with `make`, `git`, `curl`, `python3`, `xxd`, `g++` (for unit tests), and `dfu-util` (for USB flashing).
 
-### Variable: netConfig
-String `ip=%d.%d.%d.%d|snet=%d.%d.%d.%d|gway=%d.%d.%d.%d|mac=%02X:%02X:%02X:%02X:%02X:%02X|ssid=%s` where
-- `ip` - IP address
-- `snet` - subnet
-- `gway` - gateway
-- `mac` - MAC address of the device
+### 1. Download Local Toolchain (One-Time)
+Downloads official **Particle Device OS v3.3.1**, prebuilt P1 OS 3.3.1 system images, and **GNU Arm Embedded Toolchain 10.2.1** into `.toolchain/` (gitignored):
 
-### Function: setState
-Requests change of door state. As parameter the function receives a string containing a new state such as (`open`, `closed`, `stop`)
+```bash
+make toolchain
+```
 
-### Function: setConfig
-Updates doorConfig parameters as listed above. As parameter the function receives a string containing pipe delimited values for `doorConfig` that need to be updated e.g. `srr=5|rlp=%d`. Omitted parameters will remain unchanged, the order of parameters is not important. The length is limited to 63 characters so the request for multiple changes may need to be split into multiple calls.
+### 2. Run Unit Tests (Host C++17)
+Runs native unit tests covering the door/relay state machine, laser math safety, rollover-safe timers, Northern & Southern Hemisphere DST, CRC32 config persistence, alert engine, JSON utilities, and Home Assistant discovery payloads:
 
-### Event: state
-Published when state of the door changes, parameter is the new state. This event can be used to update the UI.
+```bash
+make test
+```
 
-### Event: alert
-Published when alert is generated or device configuration changes. Parameter is JSON with the type of alert and related data. Multiple alert types are supported:
+### 3. Build P1 Firmware
+Embeds the gzipped Web UI + SoftAP portal and compiles `target/garadget.bin` (Device OS 3.3.1, Platform 8 / P1):
 
-#### state
-Published when state of the door or device changes and alert for the new state is enabled in configuration (`aev` setting).
-Example JSON: `{"name": "Home", "type": "state", data: "opening"}`
+```bash
+make firmware
+```
 
-#### timeout
-Published when door remains open longer than the configured timeout, parameter is the configured timeout (`aot` setting).
-Example JSON: `{"name": "Home", "type": "timeout", "data": "20m"}`
+Output binary: `target/garadget.bin` (~86 KB, comfortably inside the P1's 128 KB user slot).
 
-#### night
-Published when door remains opens at the beginning of the configured night period or opened during that period. Parameter is the configured time of start of the night period. Parameter is configured time range (`ans` and `ane` settings).
-Example JSON: `{"name": "Home", "type": "night", "data": "1320-360"}`
+---
 
-#### config
-Published when device configuration is updated, parameter is the updated configuration string.
-Example JSON: `{"name": "Home", "type": "config", "data": "ans=1320|ane=360|tzo=-7.0"}`
+## Flashing to Your Garadget Device
 
-#### LWT
-Publishes on "Online" and "Offline" on connect and disconnect from the broker. Published on channel /LWT 
+### First-Time Flash Over USB (`particle flash --local`)
+1. Connect Garadget via a micro-USB data cable.
+2. Flash the Device OS 3.3.1 bootloader (required if upgrading from OS < 2.0 — put device in Listening Mode by holding `M` for 3s until blinking dark blue):
+   ```bash
+   particle flash --local .toolchain/device-os-bins/3.3.1/p1-bootloader@3.3.1+lto.bin
+   ```
+3. Flash Device OS 3.3.1 system parts and the new firmware:
+   ```bash
+   particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part1@3.3.1.bin
+   particle flash --local .toolchain/device-os-bins/3.3.1/p1-system-part2@3.3.1.bin
+   particle flash --local target/garadget.bin
+   ```
 
-## Developer Resources
-- [Garadget Community Forum](http://community.garadget.com/) - post your questions, ideas and requests.
-- [Particle Build](https://build.particle.io/build/new) - web based development environment. Edit, compile and upload your new code wirelessly.
-- [Particle Dashboard](https://dashboard.particle.io/user/logs) - monitor cloud events
-- [Particle Documentation](https://docs.particle.io/reference/firmware/photon/) - Photon documentation
-- [Particle Community Forum](https://community.particle.io/)
+### Subsequent Wireless Updates (Local Web OTA — No USB Needed!)
+- **From your browser**: Open `http://<garadget-ip>/` → **System** tab → select `target/garadget.bin` → click **Upload & Flash Firmware**.
+- **From your terminal**:
+  ```bash
+  make ota HOST=192.168.1.50
+  # Or if you configured a Web UI admin password:
+  make ota HOST=192.168.1.50 PASS=yourpassword
+  ```
+
+---
+
+## First-Time Setup
+
+1. If no Wi-Fi credentials are stored (or after holding the **`M`** button for 3 seconds), Garadget enters **SoftAP Setup Mode** (blinking dark blue LED) and creates a Wi-Fi hotspot (`Photon-XXXX` / `Garadget-XXXX`).
+2. Connect your phone or computer to that hotspot and open **`http://192.168.0.1/`**.
+3. Select your Wi-Fi network, enter your Wi-Fi password, optionally set your Device Name & MQTT broker, and click **Save & Connect**.
+4. Once connected to your router, open **`http://<garadget-ip>/`** from any browser on your LAN to manage the door, tune laser reflection threshold live, configure MQTT/Home Assistant, and set timezone/alerts.
+
+---
+
+## MQTT & Home Assistant Reference
+
+Assuming Device Name `Garage` (topic slug `Garage`):
+
+| Topic | Direction | Description |
+| --- | --- | --- |
+| `garadget/Garage/LWT` | Publish (retained) | `Online` / `Offline` |
+| `garadget/Garage/status` | Publish (retained) | JSON: `{"status":"closed","time":"5m","sensor":84,"bright":40,"signal":-58,"ip":"192.168.1.50"}` |
+| `garadget/Garage/config` | Publish (retained) | Safe JSON configuration (passwords redacted) |
+| `garadget/Garage/alert` | Publish | JSON: `{"name":"Garage","type":"timeout","data":"20m"}` |
+| `garadget/Garage/command` | Subscribe | `open`, `close`, `stop`, `toggle`, `get-status`, `get-config`, `reboot`, `refresh-discovery` |
+| `garadget/Garage/set-config` | Subscribe | JSON object or legacy pipe-delimited `key=val\|key=val` |
+| `garadget/Garage/set-threshold` | Subscribe | Numeric `1`–`80` (used by Home Assistant threshold entity) |
+| `homeassistant/status` | Subscribe | Listens for `online` birth message to republish discovery |
+
+When **Home Assistant Auto-Discovery** is enabled (default), the device automatically appears under **Settings → Devices & Services → MQTT** as **Garadget P1** with a Cover entity, diagnostic sensors, threshold control, reboot button, and a direct **Visit** link to the local Web UI.
+
+---
+
+## Local REST API (`http://<device-ip>`)
+
+- `GET /` — Modern gzipped Web UI
+- `GET /api/status` — Live door, sensor, Wi-Fi, MQTT, NTP, memory, and alert history JSON
+- `GET /api/config` — Current configuration JSON (passwords masked)
+- `POST /api/config` — Update configuration fields (JSON body)
+- `POST /api/command` — Execute door command: `{"command":"open|close|stop|toggle"}`
+- `POST /api/system` — Execute action: `{"action":"scan|sync-time|ha-rediscover|wifi-setup|reboot|factory-reset"}`
+- `POST /api/ota` — Stream raw `garadget.bin` firmware binary (`Content-Type: application/octet-stream`) for validated local OTA flashing
+
+If an Admin Password (`apass`) is configured, include header `X-Auth-Token: <password>` on `/api/*` requests.
+
+---
+
+## USB Serial CLI (115200 baud)
+
+Connect over USB serial for local diagnostics or configuration:
+`help` · `status` · `config` · `set key=val|k=v` · `open` · `close` · `stop` · `toggle` · `scan` · `wifi-setup` · `reboot` · `factory-reset`
+
+---
+
+## Credits & License
+
+- **Original Hardware & Firmware**: Based on the [Garadget](https://github.com/Garadget/firmware) project by Denis Grisak. This is an independent, unofficial, cloud-free rewrite.
+- **SoftAP RSA Client**: Uses Tom Wu's BSD-licensed `jsbn` RSA library (`web/softap/rsa-utils/`) for Particle P1 SoftAP credential encryption.
+- **License**: GNU General Public License v3.0 (see [LICENSE](LICENSE)).
+

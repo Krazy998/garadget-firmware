@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Garadget Local</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--card2:#263348;--fg:#f1f5f9;--muted:#94a3b8;--border:#334155;--accent:#22c55e;--accent-h:#16a34a;--warn:#f59e0b;--danger:#ef4444;--info:#38bdf8;--radius:14px}
+[data-theme="light"]{--bg:#f1f5f9;--card:#ffffff;--card2:#f8fafc;--fg:#0f172a;--muted:#64748b;--border:#e2e8f0;--accent:#16a34a;--accent-h:#15803d;--warn:#d97706;--danger:#dc2626;--info:#0284c7}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg);min-height:100vh;line-height:1.45}
+.wrap{max-width:780px;margin:0 auto;padding:16px 16px 48px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px}
+.brand svg{width:36px;height:36px;flex-shrink:0}
+.brand h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em}
+.brand small{display:block;font-size:.75rem;color:var(--muted)}
+.pills{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{font-size:.75rem;font-weight:600;padding:4px 10px;border-radius:999px;background:var(--card);border:1px solid var(--border);color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--accent)}.dot.warn{background:var(--warn)}.dot.err{background:var(--danger)}
+.icon-btn{background:var(--card);border:1px solid var(--border);color:var(--fg);border-radius:10px;padding:6px 10px;cursor:pointer;font-size:.85rem}
+.icon-btn:hover{background:var(--card2)}
+nav{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px;border-bottom:1px solid var(--border)}
+nav button{background:none;border:none;color:var(--muted);padding:8px 14px;border-radius:10px;font-weight:600;font-size:.88rem;cursor:pointer;white-space:nowrap}
+nav button:hover{color:var(--fg);background:var(--card)}
+nav button.active{color:#fff;background:var(--accent)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+.card h2{font-size:1rem;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
+.tab{display:none}.tab.active{display:block}
+.hero{display:grid;grid-template-columns:140px 1fr;gap:18px;align-items:center}
+@media(max-width:520px){.hero{grid-template-columns:1fr;text-align:center}.door-svg{margin:0 auto}}
+.door-svg{width:130px;height:110px}
+.status-label{font-size:1.75rem;font-weight:800;text-transform:capitalize;letter-spacing:-.02em}
+.status-closed{color:var(--accent)}.status-open{color:var(--danger)}.status-opening,.status-closing{color:var(--warn)}.status-stopped{color:var(--info)}
+.meta{color:var(--muted);font-size:.88rem;margin:4px 0 14px}
+.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.btn{border:none;border-radius:10px;padding:11px 16px;font-weight:700;font-size:.92rem;cursor:pointer;color:#fff;background:var(--accent);transition:transform .08s,opacity .15s}
+.btn:hover{background:var(--accent-h)}.btn:active{transform:scale(.98)}.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-stop{background:var(--warn)}.btn-stop:hover{opacity:.9}
+.btn-close{background:var(--info)}.btn-close:hover{opacity:.9}
+.btn-danger{background:var(--danger)}.btn-danger:hover{opacity:.9}
+.btn-ghost{background:var(--card2);color:var(--fg);border:1px solid var(--border)}.btn-ghost:hover{opacity:.85}
+.meter-wrap{margin-top:8px}
+.meter-head{display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:6px;color:var(--muted)}
+.meter-head strong{color:var(--fg)}
+.bar{position:relative;height:14px;background:var(--card2);border:1px solid var(--border);border-radius:999px;overflow:visible}
+.bar-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--danger),var(--warn),var(--accent));transition:width .35s}
+.bar-mark{position:absolute;top:-4px;bottom:-4px;width:3px;background:var(--fg);border-radius:2px;box-shadow:0 0 4px rgba(0,0,0,.5)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
+.stat{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.stat span{display:block;font-size:.75rem;color:var(--muted)}
+.stat strong{font-size:1.05rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:.82rem;font-weight:600;color:var(--muted);margin-bottom:5px}
+.field input[type=text],.field input[type=number],.field input[type=password],.field input[type=time],.field select{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(--border);background:var(--card2);color:var(--fg);font-size:.92rem}
+.field small{display:block;margin-top:4px;font-size:.74rem;color:var(--muted)}
+.toggle{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.9rem;font-weight:600;margin:6px 0}
+.toggle input{width:18px;height:18px;accent-color:var(--accent)}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.checks label{display:flex;align-items:center;gap:7px;font-size:.85rem;background:var(--card2);border:1px solid var(--border);padding:7px 10px;border-radius:8px;cursor:pointer}
+.checks input{accent-color:var(--accent)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;font-size:.88rem}
+.kv dt{color:var(--muted)}.kv dd{font-family:ui-monospace,SFMono-Regular,monospace;word-break:break-all}
+.alerts-list{list-style:none;display:flex;flex-direction:column;gap:6px}
+.alerts-list li{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font-size:.84rem;display:flex;justify-content:space-between;gap:8px}
+.code-box{background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:10px 12px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem;color:var(--muted);overflow-x:auto}
+#toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--fg);border:1px solid var(--border);padding:10px 18px;border-radius:999px;font-size:.88rem;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,.35);display:none;z-index:99}
+#authModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
+#authModal .card{max-width:360px;width:100%;margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 64 64" fill="none"><rect width="64" height="64" rx="14" fill="#16a34a"/><path d="M12 26L32 13L52 26V50H46V31H18V50H12V26Z" fill="#fff"/><rect x="21" y="34" width="22" height="4" rx="1.5" fill="#bbf7d0"/><rect x="21" y="40" width="22" height="4" rx="1.5" fill="#bbf7d0"/><rect x="21" y="46" width="22" height="4" rx="1.5" fill="#bbf7d0"/></svg>
+      <div><h1 id="hdrName">Garadget</h1><small id="hdrSub">Local Controller v3.0</small></div>
+    </div>
+    <div class="pills">
+      <span class="pill"><span class="dot" id="dotWifi"></span><span id="pillWifi">Wi-Fi</span></span>
+      <span class="pill"><span class="dot" id="dotMqtt"></span><span id="pillMqtt">MQTT</span></span>
+      <button class="icon-btn" id="themeBtn" title="Toggle Theme">Theme</button>
+    </div>
+  </header>
+
+  <nav id="tabs">
+    <button class="active" data-tab="dash">Dashboard</button>
+    <button data-tab="door">Door &amp; Sensor</button>
+    <button data-tab="mqtt">MQTT &amp; HA</button>
+    <button data-tab="alerts">Alerts &amp; Time</button>
+    <button data-tab="sys">System</button>
+  </nav>
+
+  <!-- DASHBOARD -->
+  <section class="tab active" id="tab-dash">
+    <div class="card">
+      <div class="hero">
+        <svg class="door-svg" viewBox="0 0 130 110">
+          <path d="M10 40 L65 10 L120 40 V102 H108 V46 H22 V102 H10 Z" fill="var(--border)"/>
+          <rect x="24" y="48" width="82" height="52" fill="var(--card2)" rx="3"/>
+          <g id="doorPanels" fill="var(--accent)">
+            <rect x="26" y="50" width="78" height="10" rx="2"/>
+            <rect x="26" y="63" width="78" height="10" rx="2"/>
+            <rect x="26" y="76" width="78" height="10" rx="2"/>
+            <rect x="26" y="89" width="78" height="10" rx="2"/>
+          </g>
+        </svg>
+        <div>
+          <div class="status-label" id="doorStatus">--</div>
+          <div class="meta">In state for <strong id="doorTime">--</strong> &middot; Local time: <span id="localTime">--</span></div>
+          <div class="controls">
+            <button class="btn" onclick="sendCmd('open')">Open</button>
+            <button class="btn btn-stop" onclick="sendCmd('stop')">Stop</button>
+            <button class="btn btn-close" onclick="sendCmd('close')">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sensor &amp; Diagnostics <button class="icon-btn" onclick="sysAction('scan')">Scan Now</button></h2>
+      <div class="meter-wrap">
+        <div class="meter-head"><span>Reflection: <strong id="reflVal">0%</strong></span><span>Threshold: <strong id="threshVal">15%</strong></span></div>
+        <div class="bar"><div class="bar-fill" id="reflBar" style="width:0%"></div><div class="bar-mark" id="threshMark" style="left:15%"></div></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>Brightness</span><strong id="brightVal">--%</strong></div>
+        <div class="stat"><span>Raw ADC</span><strong id="rawVal">--</strong></div>
+        <div class="stat"><span>Wi-Fi Signal</span><strong id="rssiVal">-- dBm</strong></div>
+        <div class="stat"><span>Mode</span><strong id="modeVal">Laser</strong></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recent Alerts</h2>
+      <ul class="alerts-list" id="alertsList"><li><span style="color:var(--muted)">No alerts recorded since boot</span></li></ul>
+    </div>
+  </section>
+
+  <!-- DOOR & SENSOR -->
+  <section class="tab" id="tab-door">
+    <div class="card">
+      <h2>Door &amp; Sensor Configuration</h2>
+      <div class="grid">
+        <div class="field"><label>Device Name</label><input type="text" id="cfg-nme" maxlength="30"><small>Used in UI, alerts &amp; MQTT topic ID</small></div>
+        <div class="field"><label>Sensor Mode</label>
+          <select id="cfg-smode"><option value="0">Laser Optical (Default)</option><option value="1">Dry Contact Switch (NO on D0)</option><option value="2">Dry Contact Switch (NC on D0)</option></select>
+        </div>
+        <div class="field"><label>Reflection Threshold (%)</label><input type="number" id="cfg-srt" min="1" max="80"><small>Above threshold = closed (1-80%)</small></div>
+        <div class="field"><label>Scan Interval (ms)</label><input type="number" id="cfg-rdt" min="200" max="60000" step="100"><small>200 - 60000 ms (default 1000)</small></div>
+        <div class="field"><label>Laser Samples Averaged</label><input type="number" id="cfg-srr" min="1" max="20"><small>1 - 20 reads per scan (default 3)</small></div>
+        <div class="field"><label>Door Motion Time (ms)</label><input type="number" id="cfg-mtt" min="1000" max="120000" step="500"><small>Full open/close duration (default 10000)</small></div>
+        <div class="field"><label>Relay Pulse Time (ms)</label><input type="number" id="cfg-rlt" min="10" max="2000" step="50"><small>Button press hold duration (default 300)</small></div>
+        <div class="field"><label>Multi-Click Pause (ms)</label><input type="number" id="cfg-rlp" min="10" max="5000" step="50"><small>Delay between 2 clicks (default 1000)</small></div>
+      </div>
+      <div class="actions"><button class="btn" onclick="saveDoorCfg()">Save Door Settings</button></div>
+    </div>
+  </section>
+
+  <!-- MQTT & HOME ASSISTANT -->
+  <section class="tab" id="tab-mqtt">
+    <div class="card">
+      <h2>MQTT Broker &amp; Home Assistant</h2>
+      <label class="toggle"><input type="checkbox" id="cfg-mqtt"> Enable MQTT Client</label>
+      <label class="toggle"><input type="checkbox" id="cfg-ha"> Enable Home Assistant Auto-Discovery</label>
+      <div class="grid" style="margin-top:12px">
+        <div class="field"><label>Broker Host or IP</label><input type="text" id="cfg-mqhost" placeholder="192.168.1.10 or mqtt.lan"></div>
+        <div class="field"><label>Broker Port</label><input type="number" id="cfg-mqpt" min="1" max="65535" value="1883"></div>
+        <div class="field"><label>Username (optional)</label><input type="text" id="cfg-mqus"></div>
+        <div class="field"><label>Password (optional)</label><input type="password" id="cfg-mqpw" placeholder="Leave blank to keep existing"></div>
+        <div class="field"><label>Keepalive (seconds)</label><input type="number" id="cfg-mqto" min="5" max="300" value="15"></div>
+        <div class="field"><label>HA Discovery Prefix</label><input type="text" id="cfg-hapfx" value="homeassistant"></div>
+      </div>
+      <div class="code-box" id="mqttTopics">Topics: garadget/Garage/{status,command,config,alert,LWT}</div>
+      <div class="actions">
+        <button class="btn" onclick="saveMqttCfg()">Save MQTT Settings</button>
+        <button class="btn btn-ghost" onclick="sysAction('ha-rediscover')">Republish HA Discovery</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ALERTS & TIME -->
+  <section class="tab" id="tab-alerts">
+    <div class="card">
+      <h2>Alerts &amp; Local Time (SNTP)</h2>
+      <div class="field"><label>Status Change Alerts (published to MQTT /alert)</label>
+        <div class="checks" id="aevChecks">
+          <label><input type="checkbox" data-bit="0"> Closed</label>
+          <label><input type="checkbox" data-bit="1"> Open</label>
+          <label><input type="checkbox" data-bit="2"> Closing</label>
+          <label><input type="checkbox" data-bit="3"> Opening</label>
+          <label><input type="checkbox" data-bit="4"> Stopped</label>
+          <label><input type="checkbox" data-bit="5"> Boot / Init</label>
+          <label><input type="checkbox" data-bit="8"> Config Update</label>
+        </div>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <div class="field"><label>Open Timeout Alert (seconds)</label><input type="number" id="cfg-aot" min="0" max="43200"><small>0 = disabled (e.g. 1200 = 20 min)</small></div>
+        <div class="field"><label>Night Alert Start</label><input type="time" id="cfg-ans"><small>Equal start &amp; end disables</small></div>
+        <div class="field"><label>Night Alert End</label><input type="time" id="cfg-ane"></div>
+        <div class="field"><label>Timezone Preset</label>
+          <select id="tzPreset" onchange="if(this.value)document.getElementById('cfg-tzo').value=this.value">
+            <option value="">-- Choose Preset --</option>
+            <option value="0">UTC (0)</option>
+            <option value="10112-5.00,20032-4.00">US Eastern (EST/EDT)</option>
+            <option value="10112-6.00,20032-5.00">US Central (CST/CDT)</option>
+            <option value="10112-7.00,20032-6.00">US Mountain (MST/MDT)</option>
+            <option value="10112-8.00,20032-7.00">US Pacific (PST/PDT)</option>
+            <option value="00102+0.00,00031+1.00">UK (GMT/BST)</option>
+            <option value="00103+1.00,00032+2.00">Central Europe (CET/CEST)</option>
+            <option value="10043+10.00,10102+11.00">Australia Sydney/Melb (AEST/AEDT)</option>
+            <option value="10">Australia Brisbane (+10)</option>
+            <option value="8">Australia Perth (+8)</option>
+          </select>
+        </div>
+        <div class="field"><label>Timezone / DST Rule (`tzo`)</label><input type="text" id="cfg-tzo"><small>Offset (e.g. -7) or DST rule</small></div>
+        <div class="field"><label>NTP Server</label><input type="text" id="cfg-ntp" placeholder="pool.ntp.org"></div>
+      </div>
+      <div class="actions">
+        <button class="btn" onclick="saveAlertCfg()">Save Alert &amp; Time Settings</button>
+        <button class="btn btn-ghost" onclick="sysAction('sync-time')">Sync NTP Time Now</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- SYSTEM -->
+  <section class="tab" id="tab-sys">
+    <div class="card">
+      <h2>Device &amp; Network Info</h2>
+      <dl class="kv" id="sysInfo"></dl>
+    </div>
+    <div class="card">
+      <h2>Web UI Security (Optional)</h2>
+      <div class="field"><label>Admin Password</label><input type="password" id="cfg-apass" placeholder="Leave blank for open LAN access"><small id="apassHint">Currently no password set</small></div>
+      <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button><button class="btn btn-ghost" onclick="clearAdminPass()">Remove Password</button></div>
+    </div>
+    <div class="card">
+      <h2>Firmware Update (Local OTA)</h2>
+      <div class="field">
+        <label>Firmware Binary (.bin for Particle P1 / Device OS 3.3.1)</label>
+        <input type="file" id="otaFile" accept=".bin" style="padding:8px;border:1px dashed var(--border);border-radius:9px;background:var(--card2);color:var(--fg);width:100%">
+        <small>Validates P1 header &amp; CRC32 in OTA staging flash before rebooting. Safe against bad uploads.</small>
+      </div>
+      <div id="otaProgWrap" style="display:none;margin:10px 0">
+        <div class="meter-head"><span id="otaStage">Uploading...</span><strong id="otaPct">0%</strong></div>
+        <div class="bar"><div class="bar-fill" id="otaBar" style="width:0%"></div></div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="otaBtn" onclick="uploadOta()">Upload &amp; Flash Firmware</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Device Actions</h2>
+      <div class="actions">
+        <button class="btn btn-ghost" onclick="sysAction('reboot')">Reboot Device</button>
+        <button class="btn btn-stop" onclick="if(confirm('Enter SoftAP Wi-Fi setup mode (192.168.0.1)?'))sysAction('wifi-setup')">Wi-Fi Setup Mode</button>
+        <button class="btn btn-danger" onclick="if(confirm('Reset ALL settings to factory defaults?'))sysAction('factory-reset')">Factory Reset</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div id="authModal">
+  <div class="card">
+    <h2>Authentication Required</h2>
+    <div class="field"><label>Admin Password</label><input type="password" id="loginPass" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="btn" style="width:100%" onclick="doLogin()">Unlock</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let authToken=sessionStorage.getItem('g_auth')||'';
+let curCfg={};
+const modes=['Laser','Switch NO','Switch NC'];
+
+function toast(msg,err){
+  const t=$('toast');t.textContent=msg;t.style.borderColor=err?'var(--danger)':'var(--accent)';
+  t.style.display='block';clearTimeout(t._tm);t._tm=setTimeout(()=>t.style.display='none',3200);
+}
+
+function setTheme(th){
+  document.documentElement.setAttribute('data-theme',th);
+  localStorage.setItem('g_theme',th);
+}
+setTheme(localStorage.getItem('g_theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark'));
+$('themeBtn').onclick=()=>setTheme(document.documentElement.getAttribute('data-theme')==='light'?'dark':'light');
+
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button,.tab').forEach(el=>el.classList.remove('active'));
+  b.classList.add('active');$('tab-'+b.dataset.tab).classList.add('active');
+});
+
+async function api(path,method='GET',body=null){
+  const h={'Accept':'application/json'};
+  if(body!==null)h['Content-Type']='application/json';
+  if(authToken)h['X-Auth-Token']=authToken;
+  const r=await fetch(path,{method,headers:h,body:body!==null?JSON.stringify(body):undefined});
+  if(r.status===401){$('authModal').style.display='flex';throw new Error('Unauthorized');}
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}
+
+function doLogin(){
+  authToken=$('loginPass').value;sessionStorage.setItem('g_auth',authToken);
+  $('authModal').style.display='none';loadAll();
+}
+
+function minToTime(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');}
+function timeToMin(t){if(!t||!t.includes(':'))return 0;const[h,m]=t.split(':').map(Number);return (h*60+m)%1440;}
+
+function updateDoorGraphic(st){
+  const g=$('doorPanels'),el=$('doorStatus');
+  el.textContent=st;el.className='status-label status-'+st;
+  const rects=g.querySelectorAll('rect');
+  const shown=st==='closed'?4:st==='open'?0:2;
+  rects.forEach((r,i)=>r.style.opacity=i<shown?1:0.08);
+  g.setAttribute('fill',st==='closed'?'var(--accent)':st==='open'?'var(--danger)':'var(--warn)');
+}
+
+async function pollStatus(){
+  try{
+    const s=await api('/api/status');
+    updateDoorGraphic(s.status);
+    $('doorTime').textContent=s.time;
+    $('localTime').textContent=s.localTime||'Unsynced';
+    $('reflVal').textContent=s.sensor+'%';
+    $('threshVal').textContent=s.threshold+'%';
+    $('reflBar').style.width=Math.min(100,s.sensor)+'%';
+    $('threshMark').style.left=Math.min(100,s.threshold)+'%';
+    $('brightVal').textContent=s.bright+'%';
+    $('rawVal').textContent=s.raw;
+    $('rssiVal').textContent=s.signal+' dBm';
+    $('modeVal').textContent=modes[s.smode]||'Laser';
+    $('dotWifi').className='dot '+(s.wifiReady?'ok':'err');
+    $('pillWifi').textContent=s.wifiReady?(s.signal+' dBm'):'Offline';
+    $('dotMqtt').className='dot '+(!s.mqttEnabled?'':s.mqttConnected?'ok':'warn');
+    $('pillMqtt').textContent=!s.mqttEnabled?'MQTT Off':(s.mqttConnected?'MQTT OK':'MQTT Retry');
+    const al=$('alertsList');
+    if(s.alerts&&s.alerts.length){
+      al.innerHTML=s.alerts.map(a=>`<li><strong>${a.type}</strong><span>${a.data}</span><span style="color:var(--muted)">@${a.up}s</span></li>`).join('');
+    }
+    const info=[
+      ['Firmware',s.ver],['Device OS',s.sys],['Device ID',s.id],['SSID',s.ssid],
+      ['IP Address',s.ip],['Subnet',s.snet],['Gateway',s.gway],['MAC',s.mac],
+      ['Uptime',s.uptime],['Free RAM',Math.round(s.freeMem/1024)+' KB'],['NTP Synced',s.ntpSynced?'Yes':'No']
+    ];
+    $('sysInfo').innerHTML=info.map(([k,v])=>`<dt>${k}</dt><dd>${v||'-'}</dd>`).join('');
+  }catch(e){}
+}
+
+async function loadConfig(){
+  try{
+    const c=await api('/api/config');curCfg=c;
+    $('hdrName').textContent=c.nme||'Garadget';
+    $('hdrSub').textContent='v'+c.ver+' · Device OS '+c.sys;
+    $('cfg-nme').value=c.nme||'';
+    $('cfg-smode').value=String(c.smode||0);
+    $('cfg-srt').value=c.srt;
+    $('cfg-rdt').value=c.rdt;
+    $('cfg-srr').value=c.srr;
+    $('cfg-mtt').value=c.mtt;
+    $('cfg-rlt').value=c.rlt;
+    $('cfg-rlp').value=c.rlp;
+    $('cfg-mqtt').checked=!!c.mqtt;
+    $('cfg-ha').checked=!!c.ha;
+    $('cfg-mqhost').value=c.mqhost||'';
+    $('cfg-mqpt').value=c.mqpt||1883;
+    $('cfg-mqus').value=c.mqus||'';
+    $('cfg-mqpw').value='';
+    $('cfg-mqpw').placeholder=c.mqpwSet?'(password saved — leave blank to keep)':'Optional MQTT password';
+    $('cfg-mqto').value=c.mqto||15;
+    $('cfg-hapfx').value=c.hapfx||'homeassistant';
+    const tid=(c.nme||'garadget').replace(/[^a-zA-Z0-9_-]/g,'_');
+    $('mqttTopics').textContent=`Topics: garadget/${tid}/{status,command,set-config,alert,LWT}`;
+    $('cfg-aot').value=c.aot||0;
+    $('cfg-ans').value=minToTime(c.ans||0);
+    $('cfg-ane').value=minToTime(c.ane||0);
+    $('cfg-tzo').value=c.tzo||'0';
+    $('cfg-ntp').value=c.ntp||'pool.ntp.org';
+    document.querySelectorAll('#aevChecks input').forEach(ch=>{ch.checked=!!((c.aev||0)&(1<<Number(ch.dataset.bit)));});
+    $('apassHint').textContent=c.apassSet?'Password protection is ENABLED':'Currently open on local LAN (no password)';
+  }catch(e){}
+}
+
+async function sendCmd(cmd){
+  try{await api('/api/command','POST',{command:cmd});toast('Sent: '+cmd);setTimeout(pollStatus,400);}
+  catch(e){toast('Command failed',true);}
+}
+
+async function saveCfg(payload){
+  try{await api('/api/config','POST',payload);toast('Settings saved');await loadConfig();pollStatus();}
+  catch(e){toast('Save failed — check values',true);}
+}
+
+function saveDoorCfg(){
+  saveCfg({
+    nme:$('cfg-nme').value.trim(),smode:Number($('cfg-smode').value),
+    srt:Number($('cfg-srt').value),rdt:Number($('cfg-rdt').value),
+    srr:Number($('cfg-srr').value),mtt:Number($('cfg-mtt').value),
+    rlt:Number($('cfg-rlt').value),rlp:Number($('cfg-rlp').value)
+  });
+}
+
+function saveMqttCfg(){
+  const p={
+    mqtt:$('cfg-mqtt').checked?1:0,ha:$('cfg-ha').checked?1:0,
+    mqhost:$('cfg-mqhost').value.trim(),mqpt:Number($('cfg-mqpt').value),
+    mqus:$('cfg-mqus').value.trim(),mqto:Number($('cfg-mqto').value),
+    hapfx:$('cfg-hapfx').value.trim()||'homeassistant'
+  };
+  if($('cfg-mqpw').value.length>0)p.mqpw=$('cfg-mqpw').value;
+  saveCfg(p);
+}
+
+function saveAlertCfg(){
+  let aev=0;
+  document.querySelectorAll('#aevChecks input').forEach(ch=>{if(ch.checked)aev|=(1<<Number(ch.dataset.bit));});
+  saveCfg({
+    aev,aot:Number($('cfg-aot').value),
+    ans:timeToMin($('cfg-ans').value),ane:timeToMin($('cfg-ane').value),
+    tzo:$('cfg-tzo').value.trim(),ntp:$('cfg-ntp').value.trim()
+  });
+}
+
+function saveAdminPass(){
+  const pw=$('cfg-apass').value;if(!pw){toast('Enter a password first',true);return;}
+  saveCfg({apass:pw});authToken=pw;sessionStorage.setItem('g_auth',pw);$('cfg-apass').value='';
+}
+function clearAdminPass(){saveCfg({apass:''});authToken='';sessionStorage.removeItem('g_auth');}
+
+async function sysAction(action){
+  try{await api('/api/system','POST',{action});toast('Executed: '+action);if(action==='scan')setTimeout(pollStatus,250);}
+  catch(e){toast('Action failed',true);}
+}
+
+function uploadOta(){
+  const inp=$('otaFile');
+  if(!inp.files||!inp.files.length){toast('Select a .bin file first',true);return;}
+  const file=inp.files[0];
+  if(file.size<64||file.size>131072){toast('Invalid file size (must be 64B - 128KB)',true);return;}
+  if(!confirm('Upload and flash '+file.name+' ('+Math.round(file.size/1024)+' KB)? Device will reboot.'))return;
+
+  const btn=$('otaBtn');btn.disabled=true;
+  $('otaProgWrap').style.display='block';
+  $('otaStage').textContent='Uploading firmware...';
+  $('otaPct').textContent='0%';
+  $('otaBar').style.width='0%';
+
+  const xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/ota',true);
+  xhr.setRequestHeader('Content-Type','application/octet-stream');
+  if(authToken)xhr.setRequestHeader('X-Auth-Token',authToken);
+  xhr.upload.onprogress=e=>{
+    if(e.lengthComputable){
+      const p=Math.round((e.loaded/e.total)*100);
+      $('otaPct').textContent=p+'%';$('otaBar').style.width=p+'%';
+      if(p>=100)$('otaStage').textContent='Validating CRC32 & preparing flash...';
+    }
+  };
+  xhr.onload=()=>{
+    if(xhr.status===401){$('authModal').style.display='flex';btn.disabled=false;return;}
+    let res={};try{res=JSON.parse(xhr.responseText);}catch(e){}
+    if(xhr.status===200&&res.ok){
+      $('otaStage').textContent='Flashing & rebooting... waiting for device';
+      $('otaPct').textContent='100%';$('otaBar').style.width='100%';
+      toast('Upload verified! Rebooting to apply firmware...');
+      let tries=0;
+      const wait=setInterval(async()=>{
+        tries++;
+        try{await api('/api/status');clearInterval(wait);toast('Device back online!');setTimeout(()=>location.reload(),600);}
+        catch(e){if(tries>30){clearInterval(wait);btn.disabled=false;$('otaStage').textContent='Reload page manually once LED stabilizes';}}
+      },2000);
+    }else{
+      btn.disabled=false;
+      $('otaStage').textContent='Update rejected: '+(res.error||('HTTP '+xhr.status));
+      toast('OTA failed: '+(res.error||xhr.status),true);
+    }
+  };
+  xhr.onerror=()=>{btn.disabled=false;$('otaStage').textContent='Network error during upload';toast('Upload error',true);};
+  xhr.send(file);
+}
+
+async function loadAll(){await loadConfig();await pollStatus();}
+loadAll();setInterval(pollStatus,2500);
+</script>
+</body>
+</html>

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Garadget Wi-Fi Setup</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f1f5f9;padding:16px}
+.box{max-width:460px;margin:0 auto;background:#1e293b;border:1px solid #334155;border-radius:14px;padding:20px}
+h1{font-size:1.3rem;margin-bottom:4px}
+p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:16px}
+h2{font-size:.92rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px;border-bottom:1px solid #334155;padding-bottom:4px}
+.f{margin-bottom:10px}
+label{display:block;font-size:.82rem;color:#94a3b8;margin-bottom:4px}
+input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f1f5f9;font-size:.92rem}
+.nets{list-style:none;max-height:190px;overflow-y:auto;border:1px solid #334155;border-radius:8px;background:#0f172a;margin-bottom:10px}
+.nets li{padding:8px 10px;border-bottom:1px solid #1e293b;display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.88rem}
+.nets li:last-child{border-bottom:none}
+.nets input{width:auto}
+.nets small{display:block;color:#64748b;font-size:.74rem}
+.row{display:flex;gap:8px;align-items:center}
+.btn{width:100%;padding:11px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-weight:700;font-size:.95rem;cursor:pointer;margin-top:8px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-s{width:auto;padding:7px 12px;font-size:.8rem;background:#334155;margin-top:0}
+.msg{padding:10px;border-radius:8px;font-size:.85rem;margin-bottom:12px;display:none}
+.msg.ok{background:#14532d;color:#bbf7d0;display:block}
+.msg.err{background:#7f1d1d;color:#fecaca;display:block}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Garadget Local Setup</h1>
+  <p class="sub" id="devInfo">Connecting to device...</p>
+  <div id="msg" class="msg"></div>
+
+  <div class="row" style="justify-content:space-between"><h2>Wi-Fi Network</h2><button class="btn btn-s" onclick="scanAp()">Rescan</button></div>
+  <ul class="nets" id="apList"><li>Scanning networks...</li></ul>
+  <div id="manualBox" style="display:none">
+    <div class="f"><label>Manual SSID</label><input id="manSsid" type="text"></div>
+    <div class="row">
+      <div class="f" style="flex:1"><label>Security</label><select id="manSec"><option value="0">Open</option><option value="4194308" selected>WPA2 AES</option><option value="4194306">WPA2 TKIP</option><option value="2097156">WPA AES</option></select></div>
+      <div class="f" style="width:90px"><label>Channel</label><input id="manCh" type="number" min="1" max="14" value="6"></div>
+    </div>
+  </div>
+  <div class="f" id="passBox"><label>Wi-Fi Password</label><input id="wifiPass" type="password"></div>
+
+  <h2>Device &amp; MQTT (Optional)</h2>
+  <div class="f"><label>Device Name</label><input id="nme" type="text" value="Garage"></div>
+  <div class="f"><label>MQTT Broker Host/IP (leave blank to configure later on LAN)</label><input id="mqhost" type="text" placeholder="192.168.1.10"></div>
+  <div class="row">
+    <div class="f" style="flex:1"><label>MQTT Port</label><input id="mqpt" type="number" value="1883"></div>
+    <div class="f" style="flex:1"><label>MQTT User</label><input id="mqus" type="text"></div>
+  </div>
+  <div class="f"><label>MQTT Password</label><input id="mqpw" type="password"></div>
+
+  <button class="btn" id="saveBtn" onclick="submitSetup()" disabled>Save &amp; Connect</button>
+</div>
+<script src="rsa.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let scans=[],rsa=new RSAKey(),keyReady=false;
+const secNames={0:'Open',1:'WEP',32769:'WEP',2097154:'WPA',2097156:'WPA',4194306:'WPA2',4194308:'WPA2',4194310:'WPA2'};
+function showMsg(t,err){const m=$('msg');m.textContent=t;m.className='msg '+(err?'err':'ok');}
+function req(m,u,d,cb){
+  const x=new XMLHttpRequest();x.open(m,'/'+u,true);x.timeout=10000;
+  if(d)x.setRequestHeader('Content-Type','application/json');
+  x.onload=()=>{try{cb(null,JSON.parse(x.responseText));}catch(e){cb('Bad JSON');}};
+  x.onerror=x.ontimeout=()=>cb('Request failed');
+  x.send(d?JSON.stringify(d):null);
+}
+function apChanged(){
+  const sel=document.querySelector('input[name=ap]:checked');
+  const v=sel?Number(sel.value):-1;
+  $('manualBox').style.display=v<0?'':'none';
+  const open=(v>=0&&scans[v]&&scans[v].sec===0)||(v<0&&Number($('manSec').value)===0);
+  $('passBox').style.display=open?'none':'';
+}
+function scanAp(){
+  $('apList').innerHTML='<li>Scanning...</li>';
+  req('GET','scan-ap',null,(err,res)=>{
+    if(err||!res||!res.scans){scans=[];showMsg('Wi-Fi scan failed',true);}
+    else scans=res.scans.sort((a,b)=>b.rssi-a.rssi);
+    let h='';
+    scans.forEach((n,i)=>{
+      h+=`<li onclick="this.querySelector('input').checked=true;apChanged()"><input type="radio" name="ap" value="${i}"${i===0?' checked':''}><div>${n.ssid}<small>${secNames[n.sec]||'Secured'} · Ch ${n.ch} · ${n.rssi} dBm</small></div></li>`;
+    });
+    h+=`<li onclick="this.querySelector('input').checked=true;apChanged()"><input type="radio" name="ap" value="-1"${scans.length===0?' checked':''}><div>Enter SSID Manually<small>Hidden network</small></div></li>`;
+    $('apList').innerHTML=h;apChanged();
+  });
+}
+function loadKey(){
+  req('GET','public-key',null,(err,res)=>{
+    if(err||!res||!res.b){showMsg('Failed to fetch device public key',true);return;}
+    rsa.setPublic(res.b.substring(58,314),res.b.substring(318,324));
+    keyReady=true;$('saveBtn').disabled=false;
+  });
+}
+function loadCfg(){
+  req('GET','load-config',null,(err,c)=>{
+    if(err||!c)return;
+    $('devInfo').textContent=`ID: ${c.id} · v${c.ver} · OS ${c.sys}`;
+    if(c.nme)$('nme').value=c.nme;
+    if(c.mqhost)$('mqhost').value=c.mqhost;
+    if(c.mqpt)$('mqpt').value=c.mqpt;
+    if(c.mqus)$('mqus').value=c.mqus;
+    if(c.mqpwSet)$('mqpw').placeholder='(password saved — leave blank to keep)';
+  });
+}
+function submitSetup(){
+  if(!keyReady)return;
+  const sel=document.querySelector('input[name=ap]:checked');
+  const idx=sel?Number(sel.value):-1;
+  let ap={idx:0,pwd:rsa.encrypt($('wifiPass').value||'')};
+  if(idx>=0){ap.ssid=scans[idx].ssid;ap.sec=scans[idx].sec;ap.ch=scans[idx].ch;}
+  else{ap.ssid=$('manSsid').value.trim();ap.sec=Number($('manSec').value);ap.ch=Number($('manCh').value)||6;}
+  if(!ap.ssid){showMsg('Please select or enter a Wi-Fi SSID',true);return;}
+  $('saveBtn').disabled=true;showMsg('Saving Wi-Fi credentials...');
+  req('POST','configure-ap',ap,(e1,r1)=>{
+    if(e1||!r1||r1.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving Wi-Fi credentials',true);return;}
+    const host=$('mqhost').value.trim();
+    const cfg={nme:$('nme').value.trim()||'Garage',mqtt:host?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim()};
+    if($('mqpw').value)cfg.mqpw=$('mqpw').value;
+    showMsg('Saving device config...');
+    req('POST','save-config',cfg,(e2,r2)=>{
+      if(e2||!r2||r2.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving device settings',true);return;}
+      showMsg('Connecting to Wi-Fi! Reconnect your device to your LAN and open Garadget IP.');
+      req('POST','connect-ap',{idx:0},()=>{});
+    });
+  });
+}
+loadCfg();loadKey();scanAp();
+</script>
+</body>
+</html>

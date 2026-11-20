@@ -55,5 +55,7 @@ Temporary Items
 firmware
 .vscode
 
-# buld folder
-target/*
+# build & local toolchain folders
+target/
+.toolchain/
+tests/build/
