@@ -289,7 +289,11 @@ void HaMqttBridge::onConnected() {
 
 void HaMqttBridge::onMessage(const char* topic, const char* payload, size_t len) {
     if (!topic || !payload) return;
-    Log.info("MQTT rx: %s -> %s", topic, payload);
+    if (std::strstr(topic, "/set-config") != nullptr) {
+        Log.info("MQTT rx: %s -> [redacted %u bytes]", topic, static_cast<unsigned>(len));
+    } else {
+        Log.info("MQTT rx: %s -> %s", topic, payload);
+    }
 
     // Home Assistant birth message -> re-publish discovery + current state
     if (config_.data().haDiscovery) {
@@ -343,12 +347,12 @@ void HaMqttBridge::onMessage(const char* topic, const char* payload, size_t len)
         return;
     }
 
-    // Set-config topic (supports both JSON and legacy pipe-delimited format)
+    // Set-config topic (supports both JSON and legacy pipe-delimited format; blocks `apass` over MQTT)
     std::snprintf(expected, sizeof(expected), "garadget/%s/set-config", topicId_);
     if (std::strcmp(topic, expected) == 0) {
         int updates = (len > 0 && payload[0] == '{')
-                          ? config_.applyJsonConfig(payload, len)
-                          : config_.applyPipeConfig(payload);
+                          ? config_.applyJsonConfig(payload, len, false /* allowAdminPass */)
+                          : config_.applyPipeConfig(payload, false /* allowAdminPass */);
         if (updates > 0) {
             config_.save(storage_);
             alerts_.onConfigUpdated(millis());

@@ -44,6 +44,18 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334
     </div>
   </div>
   <div class="f" id="passBox"><label>Wi-Fi Password</label><input id="wifiPass" type="password"></div>
+  <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:#cbd5e1;margin:8px 0 4px;cursor:pointer"><input id="clearOld" type="checkbox" checked style="width:auto"> Forget previously saved Wi-Fi networks</label>
+  <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:#cbd5e1;margin:6px 0 8px;cursor:pointer"><input id="useStatic" type="checkbox" style="width:auto" onchange="$('staticBox').style.display=this.checked?'':'none'"> Use Static IP &amp; DNS</label>
+  <div id="staticBox" style="display:none">
+    <div class="row">
+      <div class="f" style="flex:1"><label>Static IP</label><input id="sip" type="text" placeholder="192.168.1.50"></div>
+      <div class="f" style="flex:1"><label>Subnet Mask</label><input id="smask" type="text" value="255.255.255.0"></div>
+    </div>
+    <div class="row">
+      <div class="f" style="flex:1"><label>Gateway</label><input id="sgw" type="text" placeholder="192.168.1.1"></div>
+      <div class="f" style="flex:1"><label>DNS Server</label><input id="sdns" type="text" placeholder="1.1.1.1"></div>
+    </div>
+  </div>
 
   <h2>Device &amp; MQTT (Optional)</h2>
   <div class="f"><label>Device Name</label><input id="nme" type="text" value="Garage"></div>
@@ -59,14 +71,19 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334
 <script src="rsa.js"></script>
 <script>
 const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let scans=[],rsa=new RSAKey(),keyReady=false;
 const secNames={0:'Open',1:'WEP',32769:'WEP',2097154:'WPA',2097156:'WPA',4194306:'WPA2',4194308:'WPA2',4194310:'WPA2'};
 function showMsg(t,err){const m=$('msg');m.textContent=t;m.className='msg '+(err?'err':'ok');}
 function req(m,u,d,cb){
-  const x=new XMLHttpRequest();x.open(m,'/'+u,true);x.timeout=10000;
-  if(d)x.setRequestHeader('Content-Type','application/json');
-  x.onload=()=>{try{cb(null,JSON.parse(x.responseText));}catch(e){cb('Bad JSON');}};
-  x.onerror=x.ontimeout=()=>cb('Request failed');
+  const x=new XMLHttpRequest();x.open(m,'/'+u,true);x.timeout=12000;
+  if(d)x.setRequestHeader('Content-Type','multipart/form-data');
+  x.onload=()=>{
+    if(x.status!==200){cb('HTTP '+x.status);return;}
+    try{cb(null,JSON.parse(x.responseText));}catch(e){cb('Bad JSON');}
+  };
+  x.onerror=()=>cb('Network error');
+  x.ontimeout=()=>cb('Timeout');
   x.send(d?JSON.stringify(d):null);
 }
 function apChanged(){
@@ -83,7 +100,7 @@ function scanAp(){
     else scans=res.scans.sort((a,b)=>b.rssi-a.rssi);
     let h='';
     scans.forEach((n,i)=>{
-      h+=`<li onclick="this.querySelector('input').checked=true;apChanged()"><input type="radio" name="ap" value="${i}"${i===0?' checked':''}><div>${n.ssid}<small>${secNames[n.sec]||'Secured'} · Ch ${n.ch} · ${n.rssi} dBm</small></div></li>`;
+      h+=`<li onclick="this.querySelector('input').checked=true;apChanged()"><input type="radio" name="ap" value="${i}"${i===0?' checked':''}><div>${esc(n.ssid)}<small>${esc(secNames[n.sec]||'Secured')} · Ch ${esc(n.ch)} · ${esc(n.rssi)} dBm</small></div></li>`;
     });
     h+=`<li onclick="this.querySelector('input').checked=true;apChanged()"><input type="radio" name="ap" value="-1"${scans.length===0?' checked':''}><div>Enter SSID Manually<small>Hidden network</small></div></li>`;
     $('apList').innerHTML=h;apChanged();
@@ -91,8 +108,25 @@ function scanAp(){
 }
 function loadKey(){
   req('GET','public-key',null,(err,res)=>{
-    if(err||!res||!res.b){showMsg('Failed to fetch device public key',true);return;}
-    rsa.setPublic(res.b.substring(58,314),res.b.substring(318,324));
+    if(err||!res||!res.b){showMsg('Failed to fetch device public key ('+(err||'empty')+')',true);return;}
+    const hex=res.b.toLowerCase();
+    // Parse ASN.1 DER RSAPublicKey (handles both 02818100 + 128B modulus and 028180 + 128B modulus)
+    let mod='',exp='010001';
+    const m81=hex.indexOf('02818100');
+    const m80=hex.indexOf('028180');
+    if(m81>=0){
+      mod=hex.substring(m81+8,m81+8+256);
+      const ePos=m81+8+256;
+      if(hex.substring(ePos,ePos+4)==='0203')exp=hex.substring(ePos+4,ePos+10);
+    }else if(m80>=0){
+      mod=hex.substring(m80+6,m80+6+256);
+      const ePos=m80+6+256;
+      if(hex.substring(ePos,ePos+4)==='0203')exp=hex.substring(ePos+4,ePos+10);
+    }else{
+      mod=hex.substring(58,314);
+      exp=hex.substring(318,324);
+    }
+    rsa.setPublic(mod,exp);
     keyReady=true;$('saveBtn').disabled=false;
   });
 }
@@ -105,29 +139,59 @@ function loadCfg(){
     if(c.mqpt)$('mqpt').value=c.mqpt;
     if(c.mqus)$('mqus').value=c.mqus;
     if(c.mqpwSet)$('mqpw').placeholder='(password saved — leave blank to keep)';
+    if(c.ipm===1){
+      $('useStatic').checked=true;$('staticBox').style.display='';
+      if(c.sip)$('sip').value=c.sip;
+      if(c.smask)$('smask').value=c.smask;
+      if(c.sgw)$('sgw').value=c.sgw;
+      if(c.sdns)$('sdns').value=c.sdns;
+    }
   });
 }
 function submitSetup(){
   if(!keyReady)return;
   const sel=document.querySelector('input[name=ap]:checked');
   const idx=sel?Number(sel.value):-1;
-  let ap={idx:0,pwd:rsa.encrypt($('wifiPass').value||'')};
+  let ap={idx:0};
   if(idx>=0){ap.ssid=scans[idx].ssid;ap.sec=scans[idx].sec;ap.ch=scans[idx].ch;}
   else{ap.ssid=$('manSsid').value.trim();ap.sec=Number($('manSec').value);ap.ch=Number($('manCh').value)||6;}
   if(!ap.ssid){showMsg('Please select or enter a Wi-Fi SSID',true);return;}
-  $('saveBtn').disabled=true;showMsg('Saving Wi-Fi credentials...');
-  req('POST','configure-ap',ap,(e1,r1)=>{
-    if(e1||!r1||r1.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving Wi-Fi credentials',true);return;}
-    const host=$('mqhost').value.trim();
-    const cfg={nme:$('nme').value.trim()||'Garage',mqtt:host?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim()};
-    if($('mqpw').value)cfg.mqpw=$('mqpw').value;
-    showMsg('Saving device config...');
-    req('POST','save-config',cfg,(e2,r2)=>{
-      if(e2||!r2||r2.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving device settings',true);return;}
-      showMsg('Connecting to Wi-Fi! Reconnect your device to your LAN and open Garadget IP.');
-      req('POST','connect-ap',{idx:0},()=>{});
+  const pw=$('wifiPass').value||'';
+  if(ap.sec!==0){
+    if(pw.length<8){showMsg('Wi-Fi password must be at least 8 characters',true);return;}
+    let enc=rsa.encrypt(pw);
+    if(!enc){showMsg('RSA encryption failed — reload page',true);return;}
+    while(enc.length<256)enc='0'+enc;
+    ap.pwd=enc;
+  }else{
+    ap.pwd='';
+  }
+  $('saveBtn').disabled=true;
+  const doConfigure=()=>{
+    showMsg('Saving Wi-Fi credentials...');
+    req('POST','configure-ap',ap,(e1,r1)=>{
+      if(e1||!r1||r1.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving Wi-Fi credentials ('+(e1||('code '+r1.r))+')',true);return;}
+      const host=$('mqhost').value.trim();
+      const cfg={nme:$('nme').value.trim()||'Garage',mqtt:host?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim(),ipm:$('useStatic').checked?1:0};
+      if($('mqpw').value)cfg.mqpw=$('mqpw').value;
+      if($('useStatic').checked){
+        cfg.sip=$('sip').value.trim();cfg.smask=$('smask').value.trim()||'255.255.255.0';
+        cfg.sgw=$('sgw').value.trim();cfg.sdns=$('sdns').value.trim();
+      }
+      showMsg('Saving device config...');
+      req('POST','save-config',cfg,(e2,r2)=>{
+        if(e2||!r2||r2.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving device settings ('+(e2||('code '+r2.r))+')',true);return;}
+        showMsg('Connecting to Wi-Fi! Reconnect your device to your LAN and open Garadget IP.');
+        req('POST','connect-ap',{idx:0},()=>{});
+      });
     });
-  });
+  };
+  if($('clearOld').checked){
+    showMsg('Clearing old Wi-Fi credentials...');
+    req('POST','clear-wifi',{},()=>setTimeout(doConfigure,150));
+  }else{
+    doConfigure();
+  }
 }
 loadCfg();loadKey();scanAp();
 </script>

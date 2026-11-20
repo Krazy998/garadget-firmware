@@ -13,7 +13,7 @@ namespace garadget {
 // Must remain well under Particle P1's 2047-byte emulated EEPROM limit.
 struct DeviceConfig {
     static constexpr uint32_t kMagic = 0x47444732u; // "GDG2"
-    static constexpr uint16_t kSchemaVersion = 2;
+    static constexpr uint16_t kSchemaVersion = 3;
 
     uint32_t magic;
     uint16_t schemaVersion;
@@ -52,6 +52,14 @@ struct DeviceConfig {
     // Optional local Web UI admin password (empty = open on LAN)
     char adminPass[kAdminPassCap];   // apass
 
+    // Optional Static IPv4 & DNS configuration (added in schema v3)
+    uint8_t staticIp[4];             // sip
+    uint8_t staticMask[4];           // smask
+    uint8_t staticGw[4];             // sgw
+    uint8_t staticDns[4];            // sdns
+    uint8_t ipMode;                  // ipm: 0 = DHCP, 1 = Static IP
+    uint8_t ipPad[3];
+
     uint32_t crc32;
 };
 
@@ -83,15 +91,16 @@ public:
 
     // Sets a single parameter by key & string value.
     // Returns: -1 on validation error, 0 if unchanged, +1 if updated.
-    int setParam(const char* key, const char* value);
+    // Set allowAdminPass=false on untrusted channels (MQTT, SoftAP) to prevent changing `apass`.
+    int setParam(const char* key, const char* value, bool allowAdminPass = true);
 
     // Parses legacy pipe-delimited string ("rdt=1000|srt=20|nme=Garage") or "defaults".
     // Returns number of updated parameters, or -1 on parse failure.
-    int applyPipeConfig(const char* pipeStr);
+    int applyPipeConfig(const char* pipeStr, bool allowAdminPass = true);
 
     // Parses JSON object ("{\"srt\":20,\"mqhost\":\"192.168.1.5\"}").
     // Returns number of updated parameters, or -1 on parse/validation failure.
-    int applyJsonConfig(const char* json, size_t len);
+    int applyJsonConfig(const char* json, size_t len, bool allowAdminPass = true);
 
     // Writes safe JSON representation (secrets redacted as boolean flags).
     void toJson(char* out, size_t outCap,

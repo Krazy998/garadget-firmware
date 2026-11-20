@@ -9,9 +9,29 @@
 
 namespace garadget {
 
-void WifiManager::init(uint32_t nowMs) {
+void WifiManager::applyIpConfig(const DeviceConfig& cfg) {
+    if (cfg.ipMode == 1) {
+        IPAddress ip(cfg.staticIp[0], cfg.staticIp[1], cfg.staticIp[2], cfg.staticIp[3]);
+        IPAddress mask(cfg.staticMask[0], cfg.staticMask[1], cfg.staticMask[2], cfg.staticMask[3]);
+        IPAddress gw(cfg.staticGw[0], cfg.staticGw[1], cfg.staticGw[2], cfg.staticGw[3]);
+        bool hasDns = (cfg.staticDns[0] | cfg.staticDns[1] | cfg.staticDns[2] | cfg.staticDns[3]) != 0;
+        IPAddress dns = hasDns
+            ? IPAddress(cfg.staticDns[0], cfg.staticDns[1], cfg.staticDns[2], cfg.staticDns[3])
+            : gw;
+        WiFi.setStaticIP(ip, mask, gw, dns);
+        WiFi.useStaticIP();
+        Log.info("WiFi: using Static IP %u.%u.%u.%u (GW %u.%u.%u.%u, DNS %u.%u.%u.%u)",
+                 ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]);
+    } else {
+        WiFi.useDynamicIP();
+        Log.info("WiFi: using DHCP");
+    }
+}
+
+void WifiManager::init(uint32_t nowMs, const DeviceConfig& cfg) {
     WiFi.selectAntenna(GARADGET_ANT_MODE);
     WiFi.on();
+    applyIpConfig(cfg);
 
     if (!WiFi.hasCredentials()) {
         Log.info("WiFi: no stored credentials, entering SoftAP setup mode");
@@ -78,6 +98,7 @@ void WifiManager::enterSetupMode() {
 
 void WifiManager::clearCredentials() {
     WiFi.clearCredentials();
+    WiFi.useDynamicIP();
 }
 
 bool WifiManager::isReady() const {
@@ -121,6 +142,16 @@ void WifiManager::formatGateway(char* out, size_t outCap) const {
         return;
     }
     IPAddress ip = WiFi.gatewayIP();
+    std::snprintf(out, outCap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+}
+
+void WifiManager::formatDns(char* out, size_t outCap) const {
+    if (!out || outCap == 0) return;
+    if (!WiFi.ready()) {
+        std::snprintf(out, outCap, "0.0.0.0");
+        return;
+    }
+    IPAddress ip = WiFi.dnsServerIP();
     std::snprintf(out, outCap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
 }
 

@@ -69,15 +69,27 @@ void softapPageHandler(const char* url,
         return;
     }
 
+    if (std::strcmp(url, "/clear-wifi") == 0 && gSoftApWifi) {
+        gSoftApWifi->clearCredentials();
+        cb(cbArg, 0, 200, "application/json", nullptr);
+        response->write("{\"r\":0}");
+        return;
+    }
+
     if (std::strcmp(url, "/save-config") == 0 && gSoftApConfig && gSoftApStorage && request) {
-        char* body = request->fetch_as_string();
         int rc = -1;
-        if (body) {
-            rc = gSoftApConfig->applyJsonConfig(body, std::strlen(body));
-            if (rc >= 0) {
-                gSoftApConfig->save(*gSoftApStorage);
+        if (request->bytes_left > 0 && request->bytes_left <= 1024) {
+            char* body = request->fetch_as_string();
+            if (body) {
+                rc = gSoftApConfig->applyJsonConfig(body, std::strlen(body), false /* allowAdminPass */);
+                if (rc >= 0) {
+                    gSoftApConfig->save(*gSoftApStorage);
+                    if (gSoftApWifi) {
+                        gSoftApWifi->applyIpConfig(gSoftApConfig->data());
+                    }
+                }
+                std::free(body);
             }
-            std::free(body);
         }
         cb(cbArg, 0, 200, "application/json", nullptr);
         response->write(rc >= 0 ? "{\"r\":0}" : "{\"r\":-1}");

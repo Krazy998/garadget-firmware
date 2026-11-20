@@ -58,6 +58,24 @@ garadget::SerialCli gCli(gConfig, gStorage, gDoor, gWifi, gMqtt);
 
 bool gPendingReboot = false;
 garadget::Timer gRebootTimer;
+uint8_t gLastIpMode = 0;
+uint8_t gLastIpCfg[16]{};
+
+void snapshotIpCfg(const garadget::DeviceConfig& c) {
+    gLastIpMode = c.ipMode;
+    std::memcpy(gLastIpCfg + 0, c.staticIp, 4);
+    std::memcpy(gLastIpCfg + 4, c.staticMask, 4);
+    std::memcpy(gLastIpCfg + 8, c.staticGw, 4);
+    std::memcpy(gLastIpCfg + 12, c.staticDns, 4);
+}
+
+bool ipCfgChanged(const garadget::DeviceConfig& c) {
+    return c.ipMode != gLastIpMode ||
+           std::memcmp(gLastIpCfg + 0, c.staticIp, 4) != 0 ||
+           std::memcmp(gLastIpCfg + 4, c.staticMask, 4) != 0 ||
+           std::memcmp(gLastIpCfg + 8, c.staticGw, 4) != 0 ||
+           std::memcmp(gLastIpCfg + 12, c.staticDns, 4) != 0;
+}
 
 void onDoorStatusChanged(garadget::DoorStatus oldStatus, garadget::DoorStatus newStatus, void*) {
     uint32_t now = millis();
@@ -78,6 +96,13 @@ void onConfigSaved(void*) {
     gHardware.configureSensorMode(static_cast<garadget::SensorMode>(gConfig.data().sensorMode));
     gSntp.applyTimezoneNow();
     gMqtt.reconfigure(now);
+    if (ipCfgChanged(gConfig.data())) {
+        snapshotIpCfg(gConfig.data());
+        gWifi.applyIpConfig(gConfig.data());
+        // Cleanly reboot after HTTP response flushes so new Static IP / DHCP lease takes effect
+        gPendingReboot = true;
+        gRebootTimer.start(now, 500);
+    }
 }
 
 void onSystemAction(const char* action, void*) {
@@ -91,6 +116,10 @@ void onSystemAction(const char* action, void*) {
     } else if (std::strcmp(action, "ha-rediscover") == 0) {
         gMqtt.triggerDiscoveryRefresh();
     } else if (std::strcmp(action, "wifi-setup") == 0) {
+        gWifi.enterSetupMode();
+    } else if (std::strcmp(action, "clear-wifi") == 0) {
+        Log.warn("System: clearing saved Wi-Fi credentials and entering setup mode");
+        gWifi.clearCredentials();
         gWifi.enterSetupMode();
     } else if (std::strcmp(action, "reboot") == 0) {
         Log.info("System: reboot requested");
@@ -138,7 +167,8 @@ void setup() {
     gAlerts.onInit(gDoor.status(), now);
 
     garadget::initSoftApPortal(&gConfig, &gStorage, &gWifi);
-    gWifi.init(now);
+    snapshotIpCfg(gConfig.data());
+    gWifi.init(now, gConfig.data());
     gSntp.init();
 
     gMqtt.setHooks(onConfigSaved, onSystemAction, nullptr);

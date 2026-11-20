@@ -38,7 +38,7 @@ void SerialCli::tick(uint32_t nowMs) {
 void SerialCli::handleLine(const char* line, uint32_t nowMs) {
     if (std::strcmp(line, "help") == 0) {
         Serial.println("Garadget Local CLI v" + String(kFirmwareVersion));
-        Serial.println("Commands: status | config | set key=val[|k=v] | open | close | stop | toggle | scan | wifi-setup | reboot | factory-reset");
+        Serial.println("Commands: status | config | set key=val[|k=v] | open | close | stop | toggle | scan | wifi-setup | clear-wifi | reboot | factory-reset");
         return;
     }
 
@@ -86,6 +86,7 @@ void SerialCli::handleLine(const char* line, uint32_t nowMs) {
     }
 
     if (std::strcmp(line, "wifi-setup") == 0 ||
+        std::strcmp(line, "clear-wifi") == 0 ||
         std::strcmp(line, "reboot") == 0 ||
         std::strcmp(line, "factory-reset") == 0) {
         if (onSystemAction_) onSystemAction_(line, hookCtx_);

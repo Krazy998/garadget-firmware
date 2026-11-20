@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "../core/http_security.h"
 #include "../core/json_utils.h"
 #include "../core/ota_validator.h"
 #include "../generated/web_ui_gz.h"
@@ -17,44 +18,19 @@ namespace garadget {
 namespace {
 
 TCPServer gHttpServer(80);
-
-// Case-insensitive substring search for HTTP header lookup
-const char* findHeaderValue(const char* headers, const char* headerName) {
-    size_t nameLen = std::strlen(headerName);
-    const char* p = headers;
-    while (*p) {
-        bool match = true;
-        for (size_t i = 0; i < nameLen; ++i) {
-            char c1 = p[i];
-            char c2 = headerName[i];
-            if (c1 >= 'A' && c1 <= 'Z') c1 = static_cast<char>(c1 + 32);
-            if (c2 >= 'A' && c2 <= 'Z') c2 = static_cast<char>(c2 + 32);
-            if (c1 != c2) {
-                match = false;
-                break;
-            }
-        }
-        if (match && p[nameLen] == ':') {
-            const char* val = p + nameLen + 1;
-            while (*val == ' ' || *val == '\t') val++;
-            return val;
-        }
-        const char* nl = std::strchr(p, '\n');
-        if (!nl) break;
-        p = nl + 1;
-    }
-    return nullptr;
-}
+AuthRateLimiter gAuthLimiter;
 
 void sendTextResponse(TCPClient& client, int statusCode, const char* statusText,
                       const char* contentType, const char* body, size_t bodyLen) {
-    char hdr[256];
+    char hdr[320];
     int hlen = std::snprintf(
         hdr, sizeof(hdr),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %lu\r\n"
         "Cache-Control: no-store\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "X-Frame-Options: DENY\r\n"
         "Connection: close\r\n\r\n",
         statusCode, statusText, contentType, static_cast<unsigned long>(bodyLen));
     client.write(reinterpret_cast<const uint8_t*>(hdr), static_cast<size_t>(hlen));
@@ -70,7 +46,7 @@ void sendTextResponse(TCPClient& client, int statusCode, const char* statusText,
 }
 
 void sendGzipHtml(TCPClient& client, const unsigned char* data, size_t len) {
-    char hdr[256];
+    char hdr[420];
     int hlen = std::snprintf(
         hdr, sizeof(hdr),
         "HTTP/1.1 200 OK\r\n"
@@ -78,6 +54,9 @@ void sendGzipHtml(TCPClient& client, const unsigned char* data, size_t len) {
         "Content-Encoding: gzip\r\n"
         "Content-Length: %lu\r\n"
         "Cache-Control: no-cache\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "X-Frame-Options: DENY\r\n"
+        "Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'\r\n"
         "Connection: close\r\n\r\n",
         static_cast<unsigned long>(len));
     client.write(reinterpret_cast<const uint8_t*>(hdr), static_cast<size_t>(hlen));
@@ -89,16 +68,6 @@ void sendGzipHtml(TCPClient& client, const unsigned char* data, size_t len) {
         if (w <= 0) break;
         sent += static_cast<size_t>(w);
     }
-}
-
-bool checkAuth(const char* headers, const DeviceConfig& cfg) {
-    if (cfg.adminPass[0] == '\0') return true;
-    const char* tok = findHeaderValue(headers, "x-auth-token");
-    if (!tok) return false;
-    size_t passLen = std::strlen(cfg.adminPass);
-    if (std::strncmp(tok, cfg.adminPass, passLen) != 0) return false;
-    char end = tok[passLen];
-    return (end == '\r' || end == '\n' || end == '\0' || end == ' ');
 }
 
 // Reads up to `want` bytes from TCPClient with an idle timeout.
@@ -138,7 +107,7 @@ void sendOtaError(TCPClient& client, int code, const char* statusText, const cha
     sendTextResponse(client, code, statusText, "application/json", msg, static_cast<size_t>(len));
 }
 
-void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t contentLen) {
+void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t headerLen, size_t contentLen) {
     if (contentLen < OtaValidator::kMinBinarySize || contentLen > OtaValidator::kMaxBinarySize) {
         Log.error("OTA: invalid Content-Length (%lu)", static_cast<unsigned long>(contentLen));
         sendOtaError(client, 400, "Bad Request", "invalid_size");
@@ -146,17 +115,19 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t contentLe
     }
 
     // Handle HTTP/1.1 Expect: 100-continue (sent by curl for uploads > 1 KB)
-    if (findHeaderValue(reqHeaders, "expect") != nullptr) {
+    if (findHttpHeaderValue(reqHeaders, headerLen, "expect") != nullptr) {
         const char* cont = "HTTP/1.1 100 Continue\r\n\r\n";
         client.write(reinterpret_cast<const uint8_t*>(cont), std::strlen(cont));
     }
 
     static constexpr size_t kChunkSize = 512;
+    static constexpr uint32_t kTotalOtaTimeoutMs = 30000u;
+    uint32_t otaStartMs = millis();
     uint8_t chunk[kChunkSize];
 
-    // Read first chunk (at least 24 bytes) and validate Particle P1 header BEFORE touching flash
+    // Read first chunk (at least 24 bytes) with tight 2s timeout and validate P1 header BEFORE touching flash
     size_t firstWant = (contentLen < kChunkSize) ? contentLen : kChunkSize;
-    size_t firstRead = readStreamBytes(client, chunk, firstWant, 8000);
+    size_t firstRead = readStreamBytes(client, chunk, firstWant, 2000);
     if (firstRead < 24) {
         Log.error("OTA: truncated header read (%u bytes)", static_cast<unsigned>(firstRead));
         sendOtaError(client, 400, "Bad Request", "truncated_upload");
@@ -201,11 +172,17 @@ void handleOtaUpload(TCPClient& client, const char* reqHeaders, size_t contentLe
     validator.feed(chunk, firstRead);
     written += firstRead;
 
-    // Stream remaining chunks
+    // Stream remaining chunks with per-chunk (5s) and total (30s) caps
     while (written < contentLen) {
+        if (static_cast<uint32_t>(millis() - otaStartMs) >= kTotalOtaTimeoutMs) {
+            Log.error("OTA: total upload timeout exceeded");
+            Spark_Finish_Firmware_Update(desc, 0 /* CANCEL */, nullptr);
+            sendOtaError(client, 408, "Request Timeout", "upload_timeout");
+            return;
+        }
         size_t want = contentLen - written;
         if (want > kChunkSize) want = kChunkSize;
-        size_t got = readStreamBytes(client, chunk, want, 10000);
+        size_t got = readStreamBytes(client, chunk, want, 5000);
         if (got == 0) {
             Log.error("OTA: stream stalled at %lu/%lu bytes",
                       static_cast<unsigned long>(written), static_cast<unsigned long>(contentLen));
@@ -324,7 +301,7 @@ void WebServer::tick(uint32_t nowMs) {
                 reqBuf[reqLen - 4] == '\r' && reqBuf[reqLen - 3] == '\n' &&
                 reqBuf[reqLen - 2] == '\r' && reqBuf[reqLen - 1] == '\n') {
                 headerEnd = reqLen;
-                const char* cl = findHeaderValue(reqBuf, "content-length");
+                const char* cl = findHttpHeaderValue(reqBuf, headerEnd, "content-length");
                 if (cl) {
                     long v = std::strtol(cl, nullptr, 10);
                     if (v > 0) contentLen = static_cast<size_t>(v);
@@ -385,18 +362,41 @@ void WebServer::tick(uint32_t nowMs) {
         return;
     }
 
-    // API endpoints require auth if adminPass is configured
-    if (std::strncmp(path, "/api/", 5) == 0 && !checkAuth(reqBuf, config_.data())) {
-        const char* err = "{\"ok\":false,\"error\":\"unauthorized\"}";
-        sendTextResponse(client, 401, "Unauthorized", "application/json", err, std::strlen(err));
+    size_t hdrLen = (headerEnd > 0) ? headerEnd : reqLen;
+
+    // CSRF & Origin protection on all state-changing API requests (blocks cross-origin simple POSTs)
+    if (std::strncmp(path, "/api/", 5) == 0 &&
+        !verifyCsrfProtection(reqBuf, hdrLen, method, path)) {
+        const char* err = "{\"ok\":false,\"error\":\"csrf_rejected\"}";
+        sendTextResponse(client, 403, "Forbidden", "application/json", err, std::strlen(err));
         client.flush();
         client.stop();
         return;
     }
 
+    // API endpoints require constant-time auth + brute-force lockout when adminPass is configured
+    if (std::strncmp(path, "/api/", 5) == 0 && config_.data().adminPass[0] != '\0') {
+        if (gAuthLimiter.isLockedOut(nowMs)) {
+            const char* err = "{\"ok\":false,\"error\":\"rate_limited\"}";
+            sendTextResponse(client, 429, "Too Many Requests", "application/json", err, std::strlen(err));
+            client.flush();
+            client.stop();
+            return;
+        }
+        if (!verifyAuthToken(reqBuf, hdrLen, config_.data().adminPass)) {
+            gAuthLimiter.recordFailure(nowMs);
+            const char* err = "{\"ok\":false,\"error\":\"unauthorized\"}";
+            sendTextResponse(client, 401, "Unauthorized", "application/json", err, std::strlen(err));
+            client.flush();
+            client.stop();
+            return;
+        }
+        gAuthLimiter.recordSuccess();
+    }
+
     // Streaming binary OTA firmware upload
     if (std::strcmp(method, "POST") == 0 && std::strcmp(path, "/api/ota") == 0) {
-        handleOtaUpload(client, reqBuf, contentLen);
+        handleOtaUpload(client, reqBuf, hdrLen, contentLen);
         client.flush();
         client.stop();
         return;
@@ -407,7 +407,7 @@ void WebServer::tick(uint32_t nowMs) {
     if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/api/status") == 0) {
         char dur[16];
         char up[16];
-        char id[32], ssid[40], ip[20], snet[20], gway[20], mac[24];
+        char id[32], ssid[40], ip[20], snet[20], gway[20], dns[20], mac[24];
         formatDuration(door_.timeInStatusMs(nowMs), dur, sizeof(dur));
         formatDuration(nowMs, up, sizeof(up));
         wifi_.formatDeviceId(id, sizeof(id));
@@ -415,6 +415,7 @@ void WebServer::tick(uint32_t nowMs) {
         wifi_.formatIp(ip, sizeof(ip));
         wifi_.formatSubnet(snet, sizeof(snet));
         wifi_.formatGateway(gway, sizeof(gway));
+        wifi_.formatDns(dns, sizeof(dns));
         wifi_.formatMac(mac, sizeof(mac));
         String sysVer = System.version();
 
@@ -448,6 +449,7 @@ void WebServer::tick(uint32_t nowMs) {
         w.keyString("ip", ip);
         w.keyString("snet", snet);
         w.keyString("gway", gway);
+        w.keyString("dns", dns);
         w.keyString("mac", mac);
         w.keyString("uptime", up);
         w.keyUInt("freeMem", System.freeMemory());

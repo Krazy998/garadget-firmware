@@ -11,7 +11,7 @@ A complete, **100% local and cloud-free** C++17 firmware rewrite for the **Garad
 
 ## Features
 
-- **100% Cloudless** — Removes all Particle Cloud and Garadget Cloud dependencies. Runs purely on your local Wi-Fi network.
+- **100% Cloudless** — Removes all Particle Cloud and Garadget Cloud dependencies. Runs purely on your local Wi-Fi network (supports DHCP or Static IP + custom DNS).
 - **Built-in Modern Web UI** — Responsive dark/light dashboard hosted directly on the device (`http://<device-ip>/`) with live door animation, Open/Stop/Close buttons, real-time laser reflection meter, and full configuration.
 - **Home Assistant Auto-Discovery & MQTT 3.1.1** — Automatically creates a **Garadget P1** device in Home Assistant (5-state garage cover, laser reflection, brightness, Wi-Fi signal, time in state, alerts, threshold slider, and reboot button) while keeping backwards-compatible `garadget/<name>/...` MQTT topics.
 - **Wireless Local Web OTA** — Upload future `.bin` updates right from your browser or `make ota` with built-in P1 header and CRC32 validation.

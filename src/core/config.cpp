@@ -55,6 +55,12 @@ void ConfigManager::resetDefaults() {
     std::strncpy(cfg_.haPrefix, "homeassistant", sizeof(cfg_.haPrefix) - 1);
     cfg_.adminPass[0] = '\0';
 
+    cfg_.ipMode = 0; // DHCP by default
+    cfg_.staticIp[0] = 0; cfg_.staticIp[1] = 0; cfg_.staticIp[2] = 0; cfg_.staticIp[3] = 0;
+    cfg_.staticMask[0] = 255; cfg_.staticMask[1] = 255; cfg_.staticMask[2] = 255; cfg_.staticMask[3] = 0;
+    cfg_.staticGw[0] = 0; cfg_.staticGw[1] = 0; cfg_.staticGw[2] = 0; cfg_.staticGw[3] = 0;
+    cfg_.staticDns[0] = 0; cfg_.staticDns[1] = 0; cfg_.staticDns[2] = 0; cfg_.staticDns[3] = 0;
+
     tz_.setConfig(cfg_.timeZone);
     cfg_.crc32 = calcConfigCrc();
 }
@@ -66,13 +72,35 @@ bool ConfigManager::load(ConfigStorage& storage) {
         return false;
     }
 
-    if (loaded.magic != DeviceConfig::kMagic || loaded.schemaVersion != DeviceConfig::kSchemaVersion) {
+    if (loaded.magic != DeviceConfig::kMagic) {
         resetDefaults();
         return false;
     }
 
-    uint32_t expectedCrc = computeCrc32(&loaded, offsetof(DeviceConfig, crc32));
-    if (loaded.crc32 != expectedCrc) {
+    if (loaded.schemaVersion == 2) {
+        // Seamless v2 -> v3 migration: v2 crc32 lived at offsetof(DeviceConfig, staticIp)
+        constexpr size_t kV2CrcOffset = offsetof(DeviceConfig, staticIp);
+        uint32_t storedV2Crc = 0;
+        std::memcpy(&storedV2Crc, reinterpret_cast<const uint8_t*>(&loaded) + kV2CrcOffset, sizeof(uint32_t));
+        uint32_t expectedV2Crc = computeCrc32(&loaded, kV2CrcOffset);
+        if (storedV2Crc != expectedV2Crc) {
+            resetDefaults();
+            return false;
+        }
+        loaded.schemaVersion = DeviceConfig::kSchemaVersion;
+        loaded.ipMode = 0;
+        std::memset(loaded.staticIp, 0, sizeof(loaded.staticIp));
+        loaded.staticMask[0] = 255; loaded.staticMask[1] = 255; loaded.staticMask[2] = 255; loaded.staticMask[3] = 0;
+        std::memset(loaded.staticGw, 0, sizeof(loaded.staticGw));
+        std::memset(loaded.staticDns, 0, sizeof(loaded.staticDns));
+        std::memset(loaded.ipPad, 0, sizeof(loaded.ipPad));
+    } else if (loaded.schemaVersion == DeviceConfig::kSchemaVersion) {
+        uint32_t expectedCrc = computeCrc32(&loaded, offsetof(DeviceConfig, crc32));
+        if (loaded.crc32 != expectedCrc) {
+            resetDefaults();
+            return false;
+        }
+    } else {
         resetDefaults();
         return false;
     }
@@ -117,6 +145,13 @@ bool ConfigManager::validate() const {
     if (cfg_.mqttKeepAliveSec < kMinMqttKeepAliveSec || cfg_.mqttKeepAliveSec > kMaxMqttKeepAliveSec) return false;
     if (!isValidHostOrEmpty(cfg_.mqttHost)) return false;
     if (!isValidHostOrEmpty(cfg_.ntpServer)) return false;
+    if (cfg_.ipMode > 1) return false;
+    if (cfg_.ipMode == 1) {
+        auto isNonZero = [](const uint8_t ip[4]) { return (ip[0] | ip[1] | ip[2] | ip[3]) != 0; };
+        if (!isNonZero(cfg_.staticIp) || !isNonZero(cfg_.staticMask) || !isNonZero(cfg_.staticGw)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -148,7 +183,7 @@ bool ConfigManager::isValidHostOrEmpty(const char* host) {
     return true;
 }
 
-int ConfigManager::setParam(const char* key, const char* value) {
+int ConfigManager::setParam(const char* key, const char* value, bool allowAdminPass) {
     if (!key || !value) return -1;
 
     if (std::strcmp(key, "ver") == 0 || std::strcmp(key, "sys") == 0 || std::strcmp(key, "id") == 0) {
@@ -348,6 +383,7 @@ int ConfigManager::setParam(const char* key, const char* value) {
     }
 
     if (std::strcmp(key, "apass") == 0) {
+        if (!allowAdminPass) return -1;
         char clean[kAdminPassCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (std::strcmp(clean, cfg_.adminPass) == 0) return 0;
@@ -356,12 +392,59 @@ int ConfigManager::setParam(const char* key, const char* value) {
         return 1;
     }
 
+    auto parseIpv4Field = [](const char* s, uint8_t out[4], bool allowEmpty) -> bool {
+        if (!s || s[0] == '\0') {
+            if (!allowEmpty) return false;
+            out[0] = out[1] = out[2] = out[3] = 0;
+            return true;
+        }
+        int octet = 0, val = 0, digits = 0;
+        for (size_t i = 0; ; ++i) {
+            char c = s[i];
+            if (c >= '0' && c <= '9') {
+                val = val * 10 + (c - '0');
+                if (val > 255) return false;
+                digits++;
+            } else if (c == '.' || c == '\0') {
+                if (digits == 0 || octet >= 4) return false;
+                out[octet++] = static_cast<uint8_t>(val);
+                val = 0;
+                digits = 0;
+                if (c == '\0') break;
+            } else {
+                return false;
+            }
+        }
+        return octet == 4;
+    };
+
+    if (std::strcmp(key, "ipm") == 0) {
+        if (!parseIntStrict(value, num) || (num != 0 && num != 1)) return -1;
+        if (cfg_.ipMode == static_cast<uint8_t>(num)) return 0;
+        cfg_.ipMode = static_cast<uint8_t>(num);
+        return 1;
+    }
+
+    if (std::strcmp(key, "sip") == 0 || std::strcmp(key, "smask") == 0 ||
+        std::strcmp(key, "sgw") == 0 || std::strcmp(key, "sdns") == 0) {
+        uint8_t parsed[4];
+        if (!parseIpv4Field(value, parsed, true)) return -1;
+        uint8_t* dst = (std::strcmp(key, "sip") == 0) ? cfg_.staticIp
+                     : (std::strcmp(key, "smask") == 0) ? cfg_.staticMask
+                     : (std::strcmp(key, "sgw") == 0) ? cfg_.staticGw
+                     : cfg_.staticDns;
+        if (std::memcmp(dst, parsed, 4) == 0) return 0;
+        std::memcpy(dst, parsed, 4);
+        return 1;
+    }
+
     return -1;
 }
 
-int ConfigManager::applyPipeConfig(const char* pipeStr) {
+int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
     if (!pipeStr || pipeStr[0] == '\0') return -1;
     if (std::strcmp(pipeStr, "defaults") == 0) {
+        if (!allowAdminPass) return -1;
         resetDefaults();
         return 1;
     }
@@ -386,7 +469,7 @@ int ConfigManager::applyPipeConfig(const char* pipeStr) {
         std::memcpy(val, valStart, vlen);
         val[vlen] = '\0';
 
-        int res = setParam(key, val);
+        int res = setParam(key, val, allowAdminPass);
         if (res > 0) updates++;
 
         if (!pipe) break;
@@ -395,16 +478,19 @@ int ConfigManager::applyPipeConfig(const char* pipeStr) {
     return updates;
 }
 
-int ConfigManager::applyJsonConfig(const char* json, size_t len) {
+int ConfigManager::applyJsonConfig(const char* json, size_t len, bool allowAdminPass) {
+    DeviceConfig backup = cfg_;
+    Timezone tzBackup = tz_;
     struct ApplyCtx {
         ConfigManager* self;
+        bool allowAdminPass;
         int updates;
         bool hadError;
-    } ctx{this, 0, false};
+    } ctx{this, allowAdminPass, 0, false};
 
     auto cb = [](const char* key, const char* value, bool /*isString*/, void* user) -> bool {
         auto* c = static_cast<ApplyCtx*>(user);
-        int res = c->self->setParam(key, value);
+        int res = c->self->setParam(key, value, c->allowAdminPass);
         if (res < 0) {
             c->hadError = true;
             return true; // Continue parsing remaining valid keys
@@ -413,7 +499,9 @@ int ConfigManager::applyJsonConfig(const char* json, size_t len) {
         return true;
     };
 
-    if (!parseFlatJsonObject(json, len, cb, &ctx)) {
+    if (!parseFlatJsonObject(json, len, cb, &ctx) || !validate()) {
+        cfg_ = backup;
+        tz_ = tzBackup;
         return -1;
     }
     return ctx.hadError && ctx.updates == 0 ? -1 : ctx.updates;
@@ -460,6 +548,20 @@ void ConfigManager::toJson(char* out, size_t outCap,
     w.keyBool("mqpwSet", cfg_.mqttPass[0] != '\0');
     w.keyUInt("mqto", cfg_.mqttKeepAliveSec);
     w.keyBool("apassSet", cfg_.adminPass[0] != '\0');
+
+    auto fmtIp = [](const uint8_t ip[4], char outIp[16]) {
+        if ((ip[0] | ip[1] | ip[2] | ip[3]) == 0) {
+            outIp[0] = '\0';
+        } else {
+            std::snprintf(outIp, 16, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+        }
+    };
+    char ipBuf[16];
+    w.keyUInt("ipm", cfg_.ipMode);
+    fmtIp(cfg_.staticIp, ipBuf);   w.keyString("sip", ipBuf);
+    fmtIp(cfg_.staticMask, ipBuf); w.keyString("smask", ipBuf);
+    fmtIp(cfg_.staticGw, ipBuf);   w.keyString("sgw", ipBuf);
+    fmtIp(cfg_.staticDns, ipBuf);  w.keyString("sdns", ipBuf);
     w.endObject();
 }
 

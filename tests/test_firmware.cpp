@@ -9,6 +9,7 @@
 #include "core/alert_engine.h"
 #include "core/config.h"
 #include "core/door_controller.h"
+#include "core/http_security.h"
 #include "core/json_utils.h"
 #include "core/ota_validator.h"
 #include "core/timer.h"
@@ -444,6 +445,106 @@ void testOtaValidator() {
     assert(!v.verifyCrc());
 }
 
+void testHttpSecurityAndAcl() {
+    // 1. Header scanner must NOT scan past \r\n\r\n into body
+    const char* reqWithBodySmuggle =
+        "POST /api/command HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Content-Type: application/json\r\n"
+        "\r\n"
+        "X-Auth-Token: secret\r\n";
+    size_t hdrEnd = static_cast<size_t>((std::strstr(reqWithBodySmuggle, "\r\n\r\n") - reqWithBodySmuggle) + 4);
+    assert(findHttpHeaderValue(reqWithBodySmuggle, hdrEnd, "x-auth-token") == nullptr);
+    assert(!verifyAuthToken(reqWithBodySmuggle, hdrEnd, "secret"));
+
+    // 2. Constant-time auth token check (rejects prefix/suffix/wrong length)
+    const char* authedReq =
+        "POST /api/command HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Origin: http://192.168.1.50\r\n"
+        "Content-Type: application/json\r\n"
+        "X-Auth-Token: MyPass123\r\n\r\n";
+    size_t aLen = std::strlen(authedReq);
+    assert(verifyAuthToken(authedReq, aLen, "MyPass123"));
+    assert(!verifyAuthToken(authedReq, aLen, "MyPass12"));
+    assert(!verifyAuthToken(authedReq, aLen, "MyPass1234"));
+
+    // 3. CSRF protection: same-origin JSON passes; cross-origin or text/plain fails
+    assert(verifyCsrfProtection(authedReq, aLen, "POST", "/api/command"));
+
+    const char* crossOriginReq =
+        "POST /api/command HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Origin: http://evil.example\r\n"
+        "Content-Type: application/json\r\n\r\n";
+    assert(!verifyCsrfProtection(crossOriginReq, std::strlen(crossOriginReq), "POST", "/api/command"));
+
+    const char* simpleTextPlainCsrf =
+        "POST /api/command HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Content-Type: text/plain\r\n\r\n";
+    assert(!verifyCsrfProtection(simpleTextPlainCsrf, std::strlen(simpleTextPlainCsrf), "POST", "/api/command"));
+
+    const char* validOtaReq =
+        "POST /api/ota HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Content-Type: application/octet-stream\r\n\r\n";
+    assert(verifyCsrfProtection(validOtaReq, std::strlen(validOtaReq), "POST", "/api/ota"));
+
+    // 4. Auth rate limiter locks out after 5 failures and unlocks after 10s
+    AuthRateLimiter lim;
+    for (int i = 0; i < 4; ++i) {
+        lim.recordFailure(1000);
+        assert(!lim.isLockedOut(1000));
+    }
+    lim.recordFailure(1000);
+    assert(lim.isLockedOut(1000));
+    assert(lim.isLockedOut(10999));
+    assert(!lim.isLockedOut(11000));
+
+    // 5. Untrusted channels (MQTT / SoftAP) cannot modify apass or reset defaults
+    ConfigManager cfg;
+    cfg.resetDefaults();
+    assert(cfg.setParam("apass", "Admin123", true) == 1);
+    const char* mqttAttempt = "{\"apass\":\"\",\"srt\":22}";
+    assert(cfg.applyJsonConfig(mqttAttempt, std::strlen(mqttAttempt), false) == 1);
+    assert(std::strcmp(cfg.data().adminPass, "Admin123") == 0); // Unchanged!
+    assert(cfg.data().sensorThreshold == 22);                   // Valid field still updated
+    assert(cfg.applyPipeConfig("defaults", false) == -1);
+
+    // 6. Static IP & DNS validation + atomic rollback on incomplete static IP config
+    const char* badStatic = "{\"ipm\":1}"; // Missing sip/sgw -> must reject & roll back!
+    assert(cfg.applyJsonConfig(badStatic, std::strlen(badStatic)) == -1);
+    assert(cfg.data().ipMode == 0);
+
+    const char* goodStatic = "{\"ipm\":1,\"sip\":\"192.168.50.20\",\"smask\":\"255.255.255.0\",\"sgw\":\"192.168.50.1\",\"sdns\":\"1.1.1.1\"}";
+    assert(cfg.applyJsonConfig(goodStatic, std::strlen(goodStatic)) > 0);
+    assert(cfg.data().ipMode == 1);
+    assert(cfg.data().staticIp[0] == 192 && cfg.data().staticIp[3] == 20);
+    assert(cfg.data().staticDns[0] == 1 && cfg.data().staticDns[3] == 1);
+
+    // 7. Seamless schema v2 -> v3 EEPROM migration preserves settings
+    MemStorage migStorage;
+    DeviceConfig v2{};
+    ConfigManager tmp;
+    tmp.resetDefaults();
+    tmp.setParam("nme", "Workshop");
+    tmp.setParam("srt", "33");
+    v2 = tmp.data();
+    v2.schemaVersion = 2;
+    constexpr size_t kV2CrcOff = offsetof(DeviceConfig, staticIp);
+    uint32_t v2Crc = ConfigManager::computeCrc32(&v2, kV2CrcOff);
+    std::memcpy(reinterpret_cast<uint8_t*>(&v2) + kV2CrcOff, &v2Crc, sizeof(uint32_t));
+    migStorage.write(&v2, sizeof(v2));
+
+    ConfigManager migrated;
+    assert(migrated.load(migStorage));
+    assert(migrated.data().schemaVersion == 3);
+    assert(std::strcmp(migrated.data().deviceName, "Workshop") == 0);
+    assert(migrated.data().sensorThreshold == 33);
+    assert(migrated.data().ipMode == 0);
+}
+
 } // namespace
 
 int main() {
@@ -457,6 +558,7 @@ int main() {
     RUN_TEST(testAlertEngine);
     RUN_TEST(testMqttAndHaDiscovery);
     RUN_TEST(testOtaValidator);
+    RUN_TEST(testHttpSecurityAndAcl);
     std::printf("All %d test suites passed!\n", gTestsRun);
     return 0;
 }

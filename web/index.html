@@ -233,6 +233,23 @@ nav button.active{color:#fff;background:var(--accent)}
       <dl class="kv" id="sysInfo"></dl>
     </div>
     <div class="card">
+      <h2>IP &amp; DNS Configuration</h2>
+      <div class="field">
+        <label>IP Mode</label>
+        <select id="cfg-ipm" onchange="toggleStaticIp()">
+          <option value="0">DHCP (Automatic)</option>
+          <option value="1">Static IP</option>
+        </select>
+      </div>
+      <div id="staticIpBox" class="grid" style="display:none">
+        <div class="field"><label>Static IP Address</label><input type="text" id="cfg-sip" placeholder="192.168.1.50"></div>
+        <div class="field"><label>Subnet Mask</label><input type="text" id="cfg-smask" placeholder="255.255.255.0"></div>
+        <div class="field"><label>Gateway</label><input type="text" id="cfg-sgw" placeholder="192.168.1.1"></div>
+        <div class="field"><label>DNS Server (optional)</label><input type="text" id="cfg-sdns" placeholder="1.1.1.1 or Gateway IP"></div>
+      </div>
+      <div class="actions"><button class="btn" onclick="saveIpCfg()">Save Network Settings &amp; Reboot</button></div>
+    </div>
+    <div class="card">
       <h2>Web UI Security (Optional)</h2>
       <div class="field"><label>Admin Password</label><input type="password" id="cfg-apass" placeholder="Leave blank for open LAN access"><small id="apassHint">Currently no password set</small></div>
       <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button><button class="btn btn-ghost" onclick="clearAdminPass()">Remove Password</button></div>
@@ -257,6 +274,7 @@ nav button.active{color:#fff;background:var(--accent)}
       <div class="actions">
         <button class="btn btn-ghost" onclick="sysAction('reboot')">Reboot Device</button>
         <button class="btn btn-stop" onclick="if(confirm('Enter SoftAP Wi-Fi setup mode (192.168.0.1)?'))sysAction('wifi-setup')">Wi-Fi Setup Mode</button>
+        <button class="btn btn-stop" onclick="if(confirm('Forget all saved Wi-Fi networks and enter SoftAP setup? (Door & MQTT settings are kept)'))sysAction('clear-wifi')">Forget Wi-Fi &amp; Setup</button>
         <button class="btn btn-danger" onclick="if(confirm('Reset ALL settings to factory defaults?'))sysAction('factory-reset')">Factory Reset</button>
       </div>
     </div>
@@ -274,6 +292,7 @@ nav button.active{color:#fff;background:var(--accent)}
 
 <script>
 const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let authToken=sessionStorage.getItem('g_auth')||'';
 let curCfg={};
 const modes=['Laser','Switch NO','Switch NC'];
@@ -342,14 +361,14 @@ async function pollStatus(){
     $('pillMqtt').textContent=!s.mqttEnabled?'MQTT Off':(s.mqttConnected?'MQTT OK':'MQTT Retry');
     const al=$('alertsList');
     if(s.alerts&&s.alerts.length){
-      al.innerHTML=s.alerts.map(a=>`<li><strong>${a.type}</strong><span>${a.data}</span><span style="color:var(--muted)">@${a.up}s</span></li>`).join('');
+      al.innerHTML=s.alerts.map(a=>`<li><strong>${esc(a.type)}</strong><span>${esc(a.data)}</span><span style="color:var(--muted)">@${esc(a.up)}s</span></li>`).join('');
     }
     const info=[
       ['Firmware',s.ver],['Device OS',s.sys],['Device ID',s.id],['SSID',s.ssid],
-      ['IP Address',s.ip],['Subnet',s.snet],['Gateway',s.gway],['MAC',s.mac],
+      ['IP Address',s.ip],['Subnet',s.snet],['Gateway',s.gway],['DNS Server',s.dns],['MAC',s.mac],
       ['Uptime',s.uptime],['Free RAM',Math.round(s.freeMem/1024)+' KB'],['NTP Synced',s.ntpSynced?'Yes':'No']
     ];
-    $('sysInfo').innerHTML=info.map(([k,v])=>`<dt>${k}</dt><dd>${v||'-'}</dd>`).join('');
+    $('sysInfo').innerHTML=info.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v||'-')}</dd>`).join('');
   }catch(e){}
 }
 
@@ -384,7 +403,24 @@ async function loadConfig(){
     $('cfg-ntp').value=c.ntp||'pool.ntp.org';
     document.querySelectorAll('#aevChecks input').forEach(ch=>{ch.checked=!!((c.aev||0)&(1<<Number(ch.dataset.bit)));});
     $('apassHint').textContent=c.apassSet?'Password protection is ENABLED':'Currently open on local LAN (no password)';
+    $('cfg-ipm').value=String(c.ipm||0);
+    $('cfg-sip').value=c.sip||'';
+    $('cfg-smask').value=c.smask||'255.255.255.0';
+    $('cfg-sgw').value=c.sgw||'';
+    $('cfg-sdns').value=c.sdns||'';
+    toggleStaticIp();
   }catch(e){}
+}
+
+function toggleStaticIp(){$('staticIpBox').style.display=$('cfg-ipm').value==='1'?'grid':'none';}
+
+async function saveIpCfg(){
+  const ipm=Number($('cfg-ipm').value);
+  const p={ipm,sip:$('cfg-sip').value.trim(),smask:$('cfg-smask').value.trim()||'255.255.255.0',sgw:$('cfg-sgw').value.trim(),sdns:$('cfg-sdns').value.trim()};
+  try{
+    await api('/api/config','POST',p);
+    toast(ipm?'Static IP saved! Rebooting to '+p.sip+'...':'Switched to DHCP! Rebooting...');
+  }catch(e){toast('Invalid IP / Subnet / Gateway',true);}
 }
 
 async function sendCmd(cmd){
