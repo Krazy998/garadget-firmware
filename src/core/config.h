@@ -77,6 +77,14 @@ public:
     virtual bool write(const void* src, size_t len) = 0;
 };
 
+// Access scope for configuration updates:
+//   Operational: sensor, door timing, alerts, timezone, and LED settings only (MQTT set-config).
+//   Full:        all settings including network, MQTT broker, NTP, admin password, and defaults (LAN Web UI, SoftAP, Serial CLI).
+enum class ConfigScope : uint8_t {
+    Operational = 0,
+    Full = 1,
+};
+
 class ConfigManager {
 public:
     ConfigManager() = default;
@@ -94,22 +102,22 @@ public:
     bool validate() const;
 
     // Sets a single parameter by key & string value.
-    // Returns: -1 on validation error, 0 if unchanged, +1 if updated.
-    // Set allowAdminPass=false on untrusted channels (MQTT) to prevent changing `apass`.
-    int setParam(const char* key, const char* value, bool allowAdminPass = true);
+    // Returns: -1 on validation/scope error, 0 if unchanged, +1 if updated.
+    int setParam(const char* key, const char* value, ConfigScope scope = ConfigScope::Full);
 
     bool hasAdminPassword() const { return cfg_.adminPass[0] != '\0'; }
 
     // Parses legacy pipe-delimited string ("rdt=1000|srt=20|nme=Garage") or "defaults".
-    // Returns number of updated parameters, or -1 on parse failure.
-    int applyPipeConfig(const char* pipeStr, bool allowAdminPass = true);
+    // Returns number of updated parameters, or -1 on parse/validation/scope failure (rolls back atomically).
+    int applyPipeConfig(const char* pipeStr, ConfigScope scope = ConfigScope::Full);
 
-    // Parses JSON object ("{\"srt\":20,\"mqhost\":\"192.168.1.5\"}").
-    // Returns number of updated parameters, or -1 on parse/validation failure.
-    int applyJsonConfig(const char* json, size_t len, bool allowAdminPass = true);
+    // Parses JSON object ("{\"srt\":20,\"leds\":1}").
+    // Returns number of updated parameters, or -1 on parse/validation/scope failure (rolls back atomically).
+    int applyJsonConfig(const char* json, size_t len, ConfigScope scope = ConfigScope::Full);
 
     // Writes safe JSON representation (secrets redacted as boolean flags).
-    void toJson(char* out, size_t outCap,
+    // Returns true if the complete JSON object fit without truncation.
+    bool toJson(char* out, size_t outCap,
                 const char* deviceId,
                 const char* systemVersion,
                 const char* wifiSsid,

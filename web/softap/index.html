@@ -58,9 +58,9 @@ input,select{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334
   </div>
 
   <h2>Web Admin Password</h2>
-  <p class="sub" id="apassHint" style="margin-bottom:8px">Required: set a password (min 4 characters) to protect the LAN Web UI &amp; OTA updates.</p>
+  <p class="sub" id="apassHint" style="margin-bottom:8px">Required: set a password (min 8 characters) to protect the LAN Web UI &amp; OTA updates.</p>
   <div class="row">
-    <div class="f" style="flex:1"><label>Web Admin Password</label><input id="adminPass" type="password" maxlength="31" placeholder="Minimum 4 characters"></div>
+    <div class="f" style="flex:1"><label>Web Admin Password</label><input id="adminPass" type="password" maxlength="31" placeholder="Minimum 8 characters"></div>
     <div class="f" style="flex:1"><label>Confirm Password</label><input id="adminPass2" type="password" maxlength="31" placeholder="Re-enter password"></div>
   </div>
   <button class="btn btn-s" id="resetPwBtn" style="display:none;width:100%;margin-bottom:6px" onclick="resetPasswordOnly()">Reset Admin Password Only (Keep Current Wi-Fi)</button>
@@ -170,7 +170,7 @@ function loadCfg(){
 }
 function resetPasswordOnly(){
   const ap1=$('adminPass').value,ap2=$('adminPass2').value;
-  if(ap1.length<4){showMsg('Enter a new Web Admin Password (at least 4 characters)',true);return;}
+  if(ap1.length<8){showMsg('Enter a new Web Admin Password (at least 8 characters)',true);return;}
   if(ap1!==ap2){showMsg('Web Admin Passwords do not match',true);return;}
   $('resetPwBtn').disabled=true;$('saveBtn').disabled=true;
   showMsg('Updating Web Admin Password...');
@@ -183,8 +183,8 @@ function resetPasswordOnly(){
 function submitSetup(){
   if(!keyReady)return;
   const ap1=$('adminPass').value,ap2=$('adminPass2').value;
-  if(!apassSet&&ap1.length<4){showMsg('Please set a Web Admin Password (at least 4 characters)',true);return;}
-  if(ap1.length>0&&ap1.length<4){showMsg('Web Admin Password must be at least 4 characters',true);return;}
+  if(!apassSet&&ap1.length<8){showMsg('Please set a Web Admin Password (at least 8 characters)',true);return;}
+  if(ap1.length>0&&ap1.length<8){showMsg('Web Admin Password must be at least 8 characters',true);return;}
   if(ap1!==ap2){showMsg('Web Admin Passwords do not match',true);return;}
   const isIpv4=s=>/^(\d{1,3}\.){3}\d{1,3}$/.test(s)&&s.split('.').every(n=>Number(n)<=255);
   if($('useStatic').checked){
@@ -214,7 +214,7 @@ function submitSetup(){
       if(e1||!r1||r1.r!==0){$('saveBtn').disabled=false;showMsg('Failed saving Wi-Fi credentials ('+(e1||('code '+r1.r))+')',true);return;}
       const host=$('mqhost').value.trim();
       const cfg={nme:$('nme').value.trim()||'Garage',mqtt:($('mqttOn').checked&&host)?1:0,mqhost:host,mqpt:Number($('mqpt').value)||1883,mqus:$('mqus').value.trim(),ipm:$('useStatic').checked?1:0};
-      if(ap1.length>=4)cfg.apass=ap1;
+      if(ap1.length>=8)cfg.apass=ap1;
       if($('mqpw').value)cfg.mqpw=$('mqpw').value;
       if($('useStatic').checked){
         cfg.sip=$('sip').value.trim();cfg.smask=$('smask').value.trim()||'255.255.255.0';

@@ -33,8 +33,9 @@ void WifiManager::init(uint32_t nowMs, const DeviceConfig& cfg) {
     WiFi.on();
     applyIpConfig(cfg);
 
-    if (!WiFi.hasCredentials()) {
-        Log.info("WiFi: no stored credentials, entering SoftAP setup mode");
+    if (!WiFi.hasCredentials() || cfg.adminPass[0] == '\0') {
+        Log.info("WiFi: %s, entering SoftAP setup mode",
+                 !WiFi.hasCredentials() ? "no stored credentials" : "admin password not set");
         WiFi.listen(true);
         return;
     }
@@ -45,7 +46,7 @@ void WifiManager::init(uint32_t nowMs, const DeviceConfig& cfg) {
     reconnectTimer_.start(nowMs, 15000);
 }
 
-void WifiManager::tick(uint32_t nowMs) {
+void WifiManager::tick(uint32_t nowMs, bool hasAdminPassword) {
     if (WiFi.listening()) {
         connecting_ = false;
         wasReady_ = false;
@@ -65,12 +66,14 @@ void WifiManager::tick(uint32_t nowMs) {
                 exitSetupTimer_.start(nowMs, 350u);
             }
             if (exitSetupTimer_.expired(nowMs)) {
-                Log.info("WiFi: exiting SoftAP setup mode");
-                wasListening_ = false;
-                setupTimeoutTimer_.stop();
-                WiFi.listen(false);
+                if (hasAdminPassword && WiFi.hasCredentials()) {
+                    Log.info("WiFi: exiting SoftAP setup mode");
+                    wasListening_ = false;
+                    setupTimeoutTimer_.stop();
+                    WiFi.listen(false);
+                }
             } else if (setupTimeoutTimer_.expired(nowMs)) {
-                if (WiFi.hasCredentials()) {
+                if (WiFi.hasCredentials() && hasAdminPassword) {
                     Log.info("WiFi: SoftAP idle timeout reached, returning to saved Wi-Fi");
                     WiFi.listen(false);
                     wasListening_ = false;
@@ -90,6 +93,13 @@ void WifiManager::tick(uint32_t nowMs) {
         setupTimeoutTimer_.stop();
     }
 
+    if (!WiFi.hasCredentials() || !hasAdminPassword) {
+        Log.warn("WiFi: %s, entering SoftAP setup mode",
+                 !WiFi.hasCredentials() ? "no stored credentials" : "admin password missing");
+        WiFi.listen(true);
+        return;
+    }
+
     bool ready = WiFi.ready();
     if (ready) {
         if (!wasReady_) {
@@ -107,11 +117,6 @@ void WifiManager::tick(uint32_t nowMs) {
         Log.warn("WiFi: connection lost, scheduling reconnect");
         wasReady_ = false;
         reconnectTimer_.start(nowMs, 3000);
-    }
-
-    if (!WiFi.hasCredentials()) {
-        WiFi.listen(true);
-        return;
     }
 
     if (!connecting_ && (!reconnectTimer_.isRunning() || reconnectTimer_.expired(nowMs))) {

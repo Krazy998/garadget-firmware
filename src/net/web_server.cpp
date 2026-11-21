@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "../core/http_request.h"
 #include "../core/http_security.h"
 #include "../core/json_utils.h"
 #include "../core/ota_validator.h"
@@ -132,7 +133,7 @@ struct OtaLedGuard {
     }
 };
 
-void handleOtaUpload(TCPClient& client, const DeviceConfig& cfg,
+void handleOtaUpload(TCPClient& client, DoorController& door, const DeviceConfig& cfg,
                      const char* reqHeaders, size_t headerLen, size_t contentLen) {
     if (contentLen < OtaValidator::kMinBinarySize || contentLen > OtaValidator::kMaxBinarySize) {
         Log.error("OTA: invalid Content-Length (%lu)", static_cast<unsigned long>(contentLen));
@@ -167,6 +168,9 @@ void handleOtaUpload(TCPClient& client, const DeviceConfig& cfg,
         sendOtaError(client, 400, "Bad Request", hdrErr);
         return;
     }
+
+    // Safety invariant: guarantee relay is de-energized before touching flash
+    door.forceRelayOff();
 
     // Temporarily restore LED visibility during OTA even if Stealth Mode is active
     OtaLedGuard ledGuard{cfg, false};
@@ -327,113 +331,68 @@ void WebServer::tick(uint32_t nowMs) {
     }
 
     // Read request headers (and JSON bodies up to 1280B) with strict non-blocking budget
-    static constexpr size_t kMaxJsonBody = 1280;
-    static char reqBuf[2560];
-    size_t reqLen = 0;
-    size_t headerEnd = 0;
-    size_t contentLen = 0;
-    bool isOtaStream = false;
-    bool payloadTooLarge = false;
+    static HttpRequestParser req;
+    req.reset();
     uint32_t deadline = millis() + 300u;
 
-    while (client.connected() && static_cast<int32_t>(deadline - millis()) > 0) {
-        while (client.available() > 0 && reqLen + 1 < sizeof(reqBuf)) {
+    while (client.connected() && static_cast<int32_t>(deadline - millis()) > 0 &&
+           req.status() == HttpRequestParser::Status::Incomplete) {
+        while (client.available() > 0) {
             int b = client.read();
             if (b < 0) break;
-            reqBuf[reqLen++] = static_cast<char>(b);
-            reqBuf[reqLen] = '\0';
-
-            if (headerEnd == 0 && reqLen >= 4 &&
-                reqBuf[reqLen - 4] == '\r' && reqBuf[reqLen - 3] == '\n' &&
-                reqBuf[reqLen - 2] == '\r' && reqBuf[reqLen - 1] == '\n') {
-                headerEnd = reqLen;
-                const char* cl = findHttpHeaderValue(reqBuf, headerEnd, "content-length");
-                if (cl) {
-                    long v = std::strtol(cl, nullptr, 10);
-                    if (v > 0) contentLen = static_cast<size_t>(v);
-                }
-                if (std::strncmp(reqBuf, "POST /api/ota ", 14) == 0 ||
-                    std::strncmp(reqBuf, "POST /api/ota?", 14) == 0) {
-                    isOtaStream = true;
-                    break;
-                }
-                if (contentLen > kMaxJsonBody || headerEnd + contentLen >= sizeof(reqBuf)) {
-                    payloadTooLarge = true;
-                    break;
-                }
+            if (!req.feedByte(static_cast<uint8_t>(b))) {
+                break;
             }
         }
-        if (isOtaStream || payloadTooLarge ||
-            (headerEnd > 0 && reqLen >= headerEnd + contentLen) ||
-            (headerEnd == 0 && reqLen + 1 >= sizeof(reqBuf))) {
+        if (req.status() != HttpRequestParser::Status::Incomplete) {
             break;
         }
         delay(1);
     }
 
-    if (reqLen == 0) {
+    if (req.rawLen() == 0) {
         client.stop();
         return;
     }
 
-    if (headerEnd == 0) {
-        if (reqLen + 1 >= sizeof(reqBuf)) {
-            const char* err = "{\"ok\":false,\"error\":\"headers_too_large\"}";
-            sendTextResponse(client, 431, "Request Header Fields Too Large", "application/json", err, std::strlen(err));
-        } else {
-            const char* err = "{\"ok\":false,\"error\":\"malformed_request\"}";
-            sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
-        }
-        client.flush();
-        client.stop();
-        return;
-    }
-
-    if (payloadTooLarge) {
-        const char* err = "{\"ok\":false,\"error\":\"payload_too_large\"}";
-        sendTextResponse(client, 413, "Payload Too Large", "application/json", err, std::strlen(err));
-        client.flush();
-        client.stop();
-        return;
-    }
-
-    // Parse request line: "METHOD /path HTTP/1.1"
-    char method[8] = {};
-    char path[64] = {};
-    {
-        const char* sp1 = std::strchr(reqBuf, ' ');
-        if (sp1) {
-            size_t mlen = static_cast<size_t>(sp1 - reqBuf);
-            if (mlen >= sizeof(method)) mlen = sizeof(method) - 1;
-            std::memcpy(method, reqBuf, mlen);
-            method[mlen] = '\0';
-
-            const char* pStart = sp1 + 1;
-            const char* sp2 = std::strchr(pStart, ' ');
-            const char* qm = std::strchr(pStart, '?');
-            const char* pEnd = sp2;
-            if (qm && (!pEnd || qm < pEnd)) pEnd = qm;
-            if (pEnd) {
-                size_t plen = static_cast<size_t>(pEnd - pStart);
-                if (plen >= sizeof(path)) plen = sizeof(path) - 1;
-                std::memcpy(path, pStart, plen);
-                path[plen] = '\0';
+    HttpRequestParser::Status parseStatus = req.finish();
+    if (parseStatus != HttpRequestParser::Status::Ready) {
+        switch (parseStatus) {
+            case HttpRequestParser::Status::HeadersTooLarge: {
+                const char* err = "{\"ok\":false,\"error\":\"headers_too_large\"}";
+                sendTextResponse(client, 431, "Request Header Fields Too Large", "application/json", err, std::strlen(err));
+                break;
+            }
+            case HttpRequestParser::Status::PayloadTooLarge: {
+                const char* err = "{\"ok\":false,\"error\":\"payload_too_large\"}";
+                sendTextResponse(client, 413, "Payload Too Large", "application/json", err, std::strlen(err));
+                break;
+            }
+            case HttpRequestParser::Status::BodyTimeout: {
+                const char* err = "{\"ok\":false,\"error\":\"body_timeout\"}";
+                sendTextResponse(client, 408, "Request Timeout", "application/json", err, std::strlen(err));
+                break;
+            }
+            default: {
+                const char* err = "{\"ok\":false,\"error\":\"malformed_request\"}";
+                sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
+                break;
             }
         }
-    }
-
-    const char* body = (headerEnd > 0 && reqLen > headerEnd) ? (reqBuf + headerEnd) : "";
-    size_t bodyLen = (headerEnd > 0 && reqLen > headerEnd) ? (reqLen - headerEnd) : 0;
-
-    if (!isOtaStream && contentLen > 0 && bodyLen < contentLen) {
-        const char* err = "{\"ok\":false,\"error\":\"body_timeout\"}";
-        sendTextResponse(client, 408, "Request Timeout", "application/json", err, std::strlen(err));
         client.flush();
         client.stop();
         return;
     }
 
-    // Serve root dashboard UI without auth (JS handles 401 modal cleanly)
+    const char* method = req.method();
+    const char* path = req.path();
+    const char* reqBuf = req.rawHeaders();
+    size_t hdrLen = req.headerLen();
+    size_t contentLen = req.contentLength();
+    const char* body = req.body();
+    size_t bodyLen = req.bodyLen();
+
+    // Serve root dashboard UI without auth (JS handles 401/428 modals cleanly)
     if (std::strcmp(method, "GET") == 0 &&
         (std::strcmp(path, "/") == 0 || std::strcmp(path, "/index.html") == 0)) {
         sendGzipHtml(client, kWebUiIndexGz, kWebUiIndexGzLen);
@@ -441,8 +400,6 @@ void WebServer::tick(uint32_t nowMs) {
         client.stop();
         return;
     }
-
-    size_t hdrLen = (headerEnd > 0) ? headerEnd : reqLen;
 
     // CSRF & Origin protection on all state-changing API requests (blocks cross-origin simple POSTs)
     if (std::strncmp(path, "/api/", 5) == 0 &&
@@ -454,41 +411,8 @@ void WebServer::tick(uint32_t nowMs) {
         return;
     }
 
-    // Mandatory first-time Web Admin Password setup endpoint (only allowed while no password is set)
-    if (std::strcmp(method, "POST") == 0 && std::strcmp(path, "/api/setup-password") == 0) {
-        if (config_.hasAdminPassword()) {
-            const char* err = "{\"ok\":false,\"error\":\"already_configured\"}";
-            sendTextResponse(client, 403, "Forbidden", "application/json", err, std::strlen(err));
-        } else {
-            struct PwCtx {
-                char pass[kAdminPassCap] = {};
-            } ctx;
-            auto cb = [](const char* k, const char* v, bool, void* u) -> bool {
-                if (std::strcmp(k, "apass") == 0) {
-                    auto* c = static_cast<PwCtx*>(u);
-                    std::strncpy(c->pass, v, sizeof(c->pass) - 1);
-                }
-                return true;
-            };
-            bool okJson = parseFlatJsonObject(body, bodyLen, cb, &ctx);
-            int res = okJson ? config_.setParam("apass", ctx.pass, true) : -1;
-            if (res > 0) {
-                config_.save(storage_);
-                alerts_.onConfigUpdated(nowMs);
-                if (onConfigSaved_) onConfigSaved_(hookCtx_);
-                const char* ok = "{\"ok\":true}";
-                sendTextResponse(client, 200, "OK", "application/json", ok, std::strlen(ok));
-            } else {
-                const char* err = "{\"ok\":false,\"error\":\"password_too_short\"}";
-                sendTextResponse(client, 400, "Bad Request", "application/json", err, std::strlen(err));
-            }
-        }
-        client.flush();
-        client.stop();
-        return;
-    }
-
-    // All API endpoints require an admin password to be configured first, then constant-time auth + per-IP lockout
+    // All API endpoints require an admin password to be configured (via SoftAP or USB Serial — never claimable on LAN),
+    // followed by constant-time auth + per-IP exponential rate limiting.
     if (std::strncmp(path, "/api/", 5) == 0) {
         if (!config_.hasAdminPassword()) {
             const char* err = "{\"ok\":false,\"error\":\"password_setup_required\"}";
@@ -520,9 +444,14 @@ void WebServer::tick(uint32_t nowMs) {
         gAuthLimiter.recordSuccess(clientIp);
     }
 
-    // Streaming binary OTA firmware upload
+    // Streaming binary OTA firmware upload (reject while door relay sequence is active)
     if (std::strcmp(method, "POST") == 0 && std::strcmp(path, "/api/ota") == 0) {
-        handleOtaUpload(client, config_.data(), reqBuf, hdrLen, contentLen);
+        if (door_.isClickSequenceBusy()) {
+            const char* err = "{\"ok\":false,\"error\":\"door_busy\"}";
+            sendTextResponse(client, 503, "Service Unavailable", "application/json", err, std::strlen(err));
+        } else {
+            handleOtaUpload(client, door_, config_.data(), reqBuf, hdrLen, contentLen);
+        }
         client.flush();
         client.stop();
         return;

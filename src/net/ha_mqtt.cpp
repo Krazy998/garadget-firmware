@@ -427,13 +427,15 @@ void HaMqttBridge::onMessage(const char* topic, const char* payload, size_t len)
         return;
     }
 
-    // Set-config topic (supports both JSON and legacy pipe-delimited format; blocks `apass` over MQTT)
+    // Set-config topic (supports JSON & pipe format; restricted to operational sensor/alert/LED settings)
     std::snprintf(expected, sizeof(expected), "garadget/%s/set-config", topicId_);
     if (std::strcmp(topic, expected) == 0) {
         int updates = (len > 0 && payload[0] == '{')
-                          ? config_.applyJsonConfig(payload, len, false /* allowAdminPass */)
-                          : config_.applyPipeConfig(payload, false /* allowAdminPass */);
-        if (updates > 0) {
+                          ? config_.applyJsonConfig(payload, len, ConfigScope::Operational)
+                          : config_.applyPipeConfig(payload, ConfigScope::Operational);
+        if (updates < 0) {
+            Log.warn("MQTT: rejected set-config payload (invalid or privileged key)");
+        } else if (updates > 0) {
             config_.save(storage_);
             alerts_.onConfigUpdated(millis());
             if (onConfigSaved_) {
@@ -493,12 +495,14 @@ void HaMqttBridge::tick(uint32_t nowMs) {
     // Staggered Home Assistant Discovery publication (1 entity per tick)
     if (cfg.haDiscovery && discoveryStep_ < kDiscoveryEntityCount) {
         char discTopic[128];
-        char discPayload[768];
+        static char discPayload[768];
         char ipStr[20];
         wifi_.formatIp(ipStr, sizeof(ipStr));
         if (buildDiscoveryPayload(discoveryStep_, cfg, deviceId_, topicId_, ipStr,
                                   discTopic, sizeof(discTopic), discPayload, sizeof(discPayload))) {
             client_.publish(discTopic, discPayload, true);
+        } else {
+            Log.warn("MQTT: HA discovery payload %u truncated, skipped", static_cast<unsigned>(discoveryStep_));
         }
         discoveryStep_++;
     }
@@ -557,8 +561,11 @@ void HaMqttBridge::publishConfig() {
     wifi_.formatMac(mac, sizeof(mac));
     String sysVer = System.version();
 
-    char payload[1152];
-    config_.toJson(payload, sizeof(payload), deviceId_, sysVer.c_str(), ssid, ip, mac);
+    static char payload[1152];
+    if (!config_.toJson(payload, sizeof(payload), deviceId_, sysVer.c_str(), ssid, ip, mac)) {
+        Log.warn("MQTT: config JSON truncated, skipped publish");
+        return;
+    }
     client_.publish(topic, payload, true);
 }
 

@@ -12,7 +12,7 @@ class WifiManager {
 public:
     void init(uint32_t nowMs, const DeviceConfig& cfg);
     void applyIpConfig(const DeviceConfig& cfg);
-    void tick(uint32_t nowMs);
+    void tick(uint32_t nowMs, bool hasAdminPassword);
 
     void enterSetupMode();
     void requestExitSetupMode();

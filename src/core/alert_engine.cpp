@@ -97,13 +97,20 @@ void AlertEngine::tick(DoorStatus currentStatus, uint32_t nowMs, bool timeValid,
         fire("timeout", dur, nowMs);
     }
 
-    if (!nightFired_ && timeValid && isNightMinute(localMinuteOfDay)) {
-        char range[16];
-        std::snprintf(range, sizeof(range), "%u-%u",
-                      static_cast<unsigned>(cfg_.alertNightStart),
-                      static_cast<unsigned>(cfg_.alertNightEnd));
-        nightFired_ = true;
-        fire("night", range, nowMs);
+    if (timeValid) {
+        if (isNightMinute(localMinuteOfDay)) {
+            if (!nightFired_) {
+                char range[16];
+                std::snprintf(range, sizeof(range), "%u-%u",
+                              static_cast<unsigned>(cfg_.alertNightStart),
+                              static_cast<unsigned>(cfg_.alertNightEnd));
+                nightFired_ = true;
+                fire("night", range, nowMs);
+            }
+        } else {
+            // Reset latch outside the night window so multi-day open doors alert once per night
+            nightFired_ = false;
+        }
     }
 }
 

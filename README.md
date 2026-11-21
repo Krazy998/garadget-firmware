@@ -76,10 +76,20 @@ particle flash --local garadget.bin
 
 ## Setup & Usage
 
-1. **Connect to Wi-Fi & Set Admin Password**: If no Wi-Fi is saved (or hold **`M`** for 3s until the LED blinks **dark blue**), join the `Photon-XXXX` hotspot and open **`http://192.168.0.1/`** to configure your Wi-Fi, **Web Admin Password** (minimum 4 characters, required), and optional MQTT settings. You can also use Wi-Fi Setup Mode at any time to reset a forgotten Web Admin Password while keeping your existing Wi-Fi.
-2. **Open the Web UI**: Find the device's IP in your router (or type `status` over USB serial at `115200` baud) and visit **`http://<garadget-ip>/`**. If upgrading from an earlier firmware without an admin password set, the Web UI will prompt you to set one on first visit.
+1. **Connect to Wi-Fi & Set Admin Password**: If no Wi-Fi or Web Admin Password is set (or hold **`M`** for 3s until the LED blinks **dark blue**), the device starts its `Photon-XXXX` setup hotspot. Open **`http://192.168.0.1/`** to configure your Wi-Fi, **Web Admin Password** (minimum 8 characters, required), and optional MQTT settings. You can also use Wi-Fi Setup Mode at any time to set or reset a forgotten Web Admin Password while keeping your existing Wi-Fi.
+2. **Open the Web UI**: Find the device's IP in your router (or type `status` over USB serial at `115200` baud), visit **`http://<garadget-ip>/`**, and sign in with your Web Admin Password.
 3. **Connect Home Assistant**: In the **MQTT & HA** tab, enter your broker host/IP and credentials. The device appears automatically under **Settings → Devices & Services → MQTT** with a direct **Visit** link to the Web UI.
 4. **Calibrate**: Use the live **Reflection %** meter on the Dashboard to set **Reflection Threshold (`srt`)** between your open and closed readings, and match **Door Motion Time (`mtt`)** to your door's travel time.
+
+---
+
+## Security & Trust Model
+
+- **Mandatory Admin Password (No LAN Claim Window)**: The device will not join the LAN with an empty Web Admin Password. If EEPROM is fresh, factory-reset, or corrupt, it automatically enters SoftAP setup mode (`192.168.0.1`). Passwords require at least **8 characters** and can only be initialized or reset via SoftAP (physical proximity) or USB Serial (`set apass=...`).
+- **Admin Password = Full Code Execution**: Anyone who knows the Web Admin Password can upload and flash any valid Particle P1 firmware binary over **Local Web OTA** (`POST /api/ota`). The OTA validator verifies the P1 header, flash bounds, exact length, and IEEE 802.3 CRC32 (integrity against corruption/wrong platform), not cryptographic signatures. Treat the admin password with the same care as root/admin credentials.
+- **Brute-Force & CSRF Protection**: `/api/*` endpoints enforce constant-time `X-Auth-Token` checks, same-origin + non-simple `Content-Type` CSRF checks, and per-IP exponential rate limiting (`15s → 30s → 60s → 120s → 300s` across 8 tracked IP slots with global spray fallback).
+- **Scoped MQTT Access**: `garadget/<name>/set-config` over MQTT is limited to operational sensor, door timing, alert, timezone, and LED parameters — it cannot change `apass`, static IP/network settings, MQTT broker credentials, NTP server, or reset factory defaults.
+- **Local LAN Transport**: Due to Particle P1 RAM limits, LAN HTTP (port 80) and MQTT (port 1883) run unencrypted on your local network. Keep the device on a trusted LAN/IoT VLAN and do not port-forward it to the internet.
 
 ---
 
@@ -88,12 +98,10 @@ particle flash --local garadget.bin
 - **Browser**: Open `http://<garadget-ip>/` → **System** tab → select `garadget.bin` → **Upload & Flash Firmware**.
 - **Terminal**:
   ```bash
-  make ota HOST=192.168.1.50
-  # If a Web UI admin password is set:
   make ota HOST=192.168.1.50 PASS=yourpassword
   ```
 
-Updates stream into the P1's dedicated OTA staging slot and validate the Particle P1 platform ID, flash bounds, and IEEE 802.3 CRC32 before rebooting.
+Updates stream into the P1's dedicated OTA staging slot and validate the Particle P1 platform ID, flash bounds, length, and IEEE 802.3 CRC32 before rebooting (and return `503` if a door relay click sequence is in progress).
 
 ---
 
@@ -159,7 +167,7 @@ Default topic root for Device Name `Garage`:
 | `garadget/Garage/config` | Publish (retained) | JSON config (passwords redacted) |
 | `garadget/Garage/alert` | Publish | `{"name":"Garage","type":"timeout","data":"20m"}` |
 | `garadget/Garage/command` | Subscribe | `open`, `close`, `stop`, `toggle`, `get-status`, `get-config`, `reboot`, `refresh-discovery` |
-| `garadget/Garage/set-config` | Subscribe | JSON object or pipe-delimited `key=val\|key=val` |
+| `garadget/Garage/set-config` | Subscribe | JSON or `key=val\|key=val` (operational sensor/alert/LED keys only; network/broker/NTP/password blocked) |
 | `garadget/Garage/set-threshold` | Subscribe | Integer `1`–`80` |
 | `garadget/Garage/set-stealth` | Subscribe | `ON` / `OFF` (Home Assistant Stealth Mode switch) |
 | `garadget/Garage/set-led-brightness` | Subscribe | Integer `0`–`100` (Home Assistant LED Brightness slider) |
@@ -173,18 +181,17 @@ Default topic root for Device Name `Garage`:
 <summary><strong>Local REST API & USB Serial CLI</strong></summary>
 
 ### REST API (`http://<garadget-ip>`)
-All `/api/*` endpoints require a Web Admin Password (`apass`) to be set (returns `428` until configured via `POST /api/setup-password` or SoftAP), and authenticated requests must include header `X-Auth-Token: <password>`.
+All `/api/*` endpoints require a configured Web Admin Password (`apass`, min 8 chars, initialized via SoftAP or USB Serial) and header `X-Auth-Token: <password>`.
 
 | Method & Path | Description |
 | --- | --- |
 | `GET /` | Gzipped Web UI dashboard |
-| `POST /api/setup-password` | First-time setup only (when no password is set): `{"apass":"..."}` (min 4 chars) |
 | `GET /api/status` | Live door state, sensor readings, network, MQTT, NTP, memory & alert history |
 | `GET /api/config` | Current configuration JSON (passwords masked as boolean flags) |
 | `POST /api/config` | Update configuration parameters (JSON body) |
 | `POST /api/command` | Execute door command: `{"command":"open\|close\|stop\|toggle"}` |
 | `POST /api/system` | Execute action: `{"action":"scan\|sync-time\|ha-rediscover\|wifi-setup\|clear-wifi\|reboot\|factory-reset"}` |
-| `POST /api/ota` | Stream raw `garadget.bin` (`application/octet-stream`) for validated local OTA flash |
+| `POST /api/ota` | Stream raw `garadget.bin` (`application/octet-stream`) for validated local OTA flash (`503` if relay busy) |
 
 ### USB Serial CLI (`115200` baud)
 `help` · `status` · `config` · `set key=val|k=v` · `open` · `close` · `stop` · `toggle` · `scan` · `wifi-setup` · `reboot` · `factory-reset`

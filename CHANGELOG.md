@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.3.0] - 2026-11-21
+
+### Security
+- **Eliminated LAN Password-Claim Window**: Removed `POST /api/setup-password` from the LAN HTTP server. Whenever no Web Admin Password is set (first boot, factory reset, or corrupt/incompatible EEPROM), the device automatically enters **SoftAP Wi-Fi Setup Mode** (`192.168.0.1`) instead of joining the LAN unprotected; passwords can only be initialized or reset via SoftAP (physical proximity) or USB Serial.
+- **Stronger Admin Passwords & Exponential Brute-Force Backoff**:
+  - Raised the minimum Web Admin Password length (`kMinAdminPassLen`) to **8 characters** for all new/updated passwords (existing shorter passwords remain accepted on login until changed).
+  - Upgraded `AuthRateLimiter` to **8 IP slots** with exponential lockout backoff (`15s → 30s → 60s → 120s → 300s`, reset on successful auth) plus a **global fallback throttle** when all 8 slots are actively locked to block multi-IP spray attacks.
+- **Restricted MQTT `set-config` Scope (`ConfigScope::Operational`)**: MQTT `garadget/<name>/set-config` now only permits operational sensor, door timing, alert, timezone, and LED parameters — blocking privileged network, static IP, MQTT broker, NTP, admin password, and `defaults` changes over MQTT.
+- **Documented OTA Trust Model**: Clarified in `README.md` that anyone with the Web Admin Password has full code execution on the device via Local Web OTA.
+
+### Fixed
+- **Double `Open` Deduplication**: Added a post-open cooldown window (`clamp(readTimeMs * 3, 3s, motionTimeMs)`, cleared on state transition) plus an accelerated 500 ms follow-up sensor scan after `Open` from `Closed` so back-to-back `Open` commands (double-tap, HA retry, web + MQTT) cannot trigger a second click and stop the door.
+- **Relay Pulse Protection Against Blocking Network Work**:
+  - Added an independent Particle FreeRTOS one-shot software `Timer` safety cutoff (`relayTimeMs + 50 ms`) in `P1DoorHardware` so the opener relay always de-energizes even if `loop()` blocks.
+  - Gated SNTP, MQTT, and Web Server ticks in `loop()` while `DoorController::isClickSequenceBusy()` is active, rejected `POST /api/ota` with `503 Service Unavailable` while the relay is busy, and forced the relay OFF before flash erase.
+- **Thread-Safe SoftAP Portal**: Staged SoftAP `/load-config`, `/save-config`, and `/clear-wifi` operations through a synchronous handoff to `tickSoftApPortal()` on the application thread so `DeviceConfig` and `EEPROM` are never accessed concurrently from the system thread.
+- **Multi-Day Night Alert Reset**: Cleared `nightFired_` when leaving the configured night window during daytime so a door left open across multiple days alerts once *each* night instead of only the first night.
+- **MQTT & Web UI Reliability**:
+  - Oversized incoming QoS 1 MQTT `PUBLISH` frames now extract the Packet Identifier and send `PUBACK` before dropping so brokers do not redeliver indefinitely.
+  - Logged explicit warnings if HA discovery or config JSON ever truncates (`ConfigManager::toJson()` now returns `bool` and skips publishing truncated config).
+  - Added a **Clear saved MQTT password** checkbox in the LAN Web UI (**MQTT & HA** tab).
+  - Moved large JSON/payload buffers in `ha_mqtt.cpp`, `mqtt_client.cpp`, `softap_portal.cpp`, and `serial_cli.cpp` off the stack, cutting peak application-thread stack usage by ~2 KB.
+  - Extracted pure `HttpRequestParser` (`src/core/http_request.h`) and expanded host unit tests to **11 suites** covering HTTP framing (`400`/`408`/`413`/`431`/OTA stop-at-headers), double-open deduplication, multi-night alerts, exponential/spray rate limiting, and `ConfigScope::Operational`.
+
+---
+
 ## [3.2.2] - 2026-11-21
 
 ### Security
@@ -93,6 +119,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed (vs. Legacy Garadget v1.26)
 - Eliminated `sprintf` buffer overflows, MQTT heap leaks on config reload, infinite blocking TCP socket reads, unsigned integer underflow in laser reflection math, and unverified EEPROM config loads (now CRC32-protected with 60s `ApplicationWatchdog` and boot-safe `PIN_RELAY` LOW).
 
+[3.3.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.2...v3.3.0
 [3.2.2]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.1...v3.2.2
 [3.2.1]: https://github.com/Krazy998/garadget-firmware/compare/v3.2.0...v3.2.1
 [3.2.0]: https://github.com/Krazy998/garadget-firmware/compare/v3.1.0...v3.2.0

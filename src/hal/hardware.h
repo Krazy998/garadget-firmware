@@ -17,6 +17,7 @@ class P1DoorHardware : public DoorHardware {
 public:
     void init(SensorMode initialMode);
     void configureSensorMode(SensorMode mode);
+    void setMaxRelayPulseMs(uint32_t ms);
 
     void setRelay(bool active) override;
     SensorReading readSensor(SensorMode mode, uint8_t samples) override;
@@ -24,6 +25,7 @@ public:
 private:
     SensorMode activeMode_ = SensorMode::Laser;
     bool initialized_ = false;
+    uint32_t maxRelayPulseMs_ = 350;
 };
 
 } // namespace garadget

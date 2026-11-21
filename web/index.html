@@ -170,7 +170,7 @@ nav button.active{color:#fff;background:var(--accent)}
         <div class="field"><label>Broker Host or IP</label><input type="text" id="cfg-mqhost" placeholder="192.168.1.10 or mqtt.lan"></div>
         <div class="field"><label>Broker Port</label><input type="number" id="cfg-mqpt" min="1" max="65535" value="1883"></div>
         <div class="field"><label>Username (optional)</label><input type="text" id="cfg-mqus"></div>
-        <div class="field"><label>Password (optional)</label><input type="password" id="cfg-mqpw" placeholder="Leave blank to keep existing"></div>
+        <div class="field"><label>Password (optional)</label><input type="password" id="cfg-mqpw" placeholder="Leave blank to keep existing"><label class="toggle" id="mqpwClrWrap" style="display:none;font-size:.8rem;margin-top:6px"><input type="checkbox" id="cfg-mqpw-clr"> Clear saved MQTT password</label></div>
         <div class="field"><label>Keepalive (seconds)</label><input type="number" id="cfg-mqto" min="5" max="300" value="15"></div>
         <div class="field"><label>HA Discovery Prefix</label><input type="text" id="cfg-hapfx" value="homeassistant"></div>
       </div>
@@ -274,10 +274,10 @@ nav button.active{color:#fff;background:var(--accent)}
     <div class="card">
       <h2>Web UI Security</h2>
       <div class="grid">
-        <div class="field"><label>New Admin Password</label><input type="password" id="cfg-apass" maxlength="31" placeholder="Minimum 4 characters"></div>
+        <div class="field"><label>New Admin Password</label><input type="password" id="cfg-apass" maxlength="31" placeholder="Minimum 8 characters"></div>
         <div class="field"><label>Confirm New Password</label><input type="password" id="cfg-apass2" maxlength="31" placeholder="Re-enter new password"></div>
       </div>
-      <div class="field"><small id="apassHint">Password protection is required. If forgotten, hold the physical M button for 3s to enter Wi-Fi Setup Mode (192.168.0.1) to reset it.</small></div>
+      <div class="field"><small id="apassHint">Password protection is required (min 8 characters). If forgotten, hold the physical M button for 3s to enter Wi-Fi Setup Mode (192.168.0.1) to reset it.</small></div>
       <div class="actions"><button class="btn" onclick="saveAdminPass()">Update Password</button></div>
     </div>
     <div class="card">
@@ -316,11 +316,9 @@ nav button.active{color:#fff;background:var(--accent)}
 </div>
 <div id="setupModal">
   <div class="card">
-    <h2>Set Web Admin Password</h2>
-    <p style="font-size:.86rem;color:var(--muted);margin-bottom:12px">First-time setup requires a Web Admin Password (minimum 4 characters) to protect door controls, settings, and OTA updates.</p>
-    <div class="field"><label>New Admin Password</label><input type="password" id="setupPass1" maxlength="31" placeholder="Minimum 4 characters"></div>
-    <div class="field"><label>Confirm Password</label><input type="password" id="setupPass2" maxlength="31" placeholder="Re-enter password" onkeydown="if(event.key==='Enter')doSetupPassword()"></div>
-    <button class="btn" style="width:100%" id="setupBtn" onclick="doSetupPassword()">Set Password &amp; Continue</button>
+    <h2>Admin Password Required</h2>
+    <p style="font-size:.86rem;color:var(--muted);margin-bottom:12px">No Web Admin Password is set on this device. For security, passwords cannot be claimed over the LAN.</p>
+    <p style="font-size:.84rem;color:var(--fg)">Connect to the device's Wi-Fi Setup hotspot (<code>Photon-XXXX</code> &rarr; <code>http://192.168.0.1/</code>) or use USB Serial (<code>set apass=...</code>) to configure an admin password (minimum 8 characters).</p>
   </div>
 </div>
 <div id="toast"></div>
@@ -356,7 +354,7 @@ async function api(path,method='GET',body=null){
   const r=await fetch(path,{method,headers:h,body:body!==null?JSON.stringify(body):undefined});
   if(r.status===428){$('authModal').style.display='none';$('setupModal').style.display='flex';throw new Error('Password setup required');}
   if(r.status===401){if(authToken)toast('Invalid admin password',true);$('setupModal').style.display='none';$('authModal').style.display='flex';throw new Error('Unauthorized');}
-  if(r.status===429){toast('Too many failed attempts — wait 10s',true);throw new Error('Rate limited');}
+  if(r.status===429){toast('Too many failed attempts — temporarily locked out',true);throw new Error('Rate limited');}
   if(!r.ok)throw new Error('HTTP '+r.status);
   return r.json();
 }
@@ -365,23 +363,6 @@ function doLogin(){
   authToken=$('loginPass').value;sessionStorage.setItem('g_auth',authToken);
   $('loginPass').value='';
   $('authModal').style.display='none';loadAll();
-}
-
-async function doSetupPassword(){
-  const p1=$('setupPass1').value,p2=$('setupPass2').value;
-  if(p1.length<4){toast('Password must be at least 4 characters',true);return;}
-  if(p1!==p2){toast('Passwords do not match',true);return;}
-  const btn=$('setupBtn');btn.disabled=true;
-  try{
-    const r=await fetch('/api/setup-password',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({apass:p1})});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    authToken=p1;sessionStorage.setItem('g_auth',p1);
-    $('setupPass1').value='';$('setupPass2').value='';
-    $('setupModal').style.display='none';
-    toast('Admin password set!');
-    await loadAll();
-  }catch(e){toast('Failed to set password — check value',true);}
-  finally{btn.disabled=false;}
 }
 
 function minToTime(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');}
@@ -448,6 +429,8 @@ async function loadConfig(){
     $('cfg-mqus').value=c.mqus||'';
     $('cfg-mqpw').value='';
     $('cfg-mqpw').placeholder=c.mqpwSet?'(password saved — leave blank to keep)':'Optional MQTT password';
+    $('cfg-mqpw-clr').checked=false;
+    $('mqpwClrWrap').style.display=c.mqpwSet?'flex':'none';
     $('cfg-mqto').value=c.mqto||15;
     $('cfg-hapfx').value=c.hapfx||'homeassistant';
     const tid=(c.nme||'').replace(/ /g,'_').replace(/[^a-zA-Z0-9_-]/g,'')||'garadget';
@@ -541,7 +524,8 @@ function saveMqttCfg(){
     mqus:$('cfg-mqus').value.trim(),mqto:Number($('cfg-mqto').value),
     hapfx:$('cfg-hapfx').value.trim()||'homeassistant'
   };
-  if($('cfg-mqpw').value.length>0)p.mqpw=$('cfg-mqpw').value;
+  if($('cfg-mqpw-clr').checked)p.mqpw='';
+  else if($('cfg-mqpw').value.length>0)p.mqpw=$('cfg-mqpw').value;
   saveCfg(p);
 }
 
@@ -557,7 +541,7 @@ function saveAlertCfg(){
 
 async function saveAdminPass(){
   const pw=$('cfg-apass').value,pw2=$('cfg-apass2').value;
-  if(pw.length<4){toast('Password must be at least 4 characters',true);return;}
+  if(pw.length<8){toast('Password must be at least 8 characters',true);return;}
   if(pw!==pw2){toast('Passwords do not match',true);return;}
   try{
     await api('/api/config','POST',{apass:pw});

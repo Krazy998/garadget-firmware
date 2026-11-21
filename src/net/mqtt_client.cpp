@@ -80,6 +80,8 @@ void MqttClient::resetRx() {
     rxMult_ = 1;
     rxPos_ = 0;
     rxOverflow_ = false;
+    rxOvfTopicLen_ = 0;
+    rxOvfPacketId_ = 0;
     rxPacketTimer_.stop();
 }
 
@@ -343,8 +345,21 @@ void MqttClient::pumpIncoming(uint32_t nowMs) {
                 break;
 
             case RxStage::Body:
-                if (!rxOverflow_ && rxPos_ < kBufferSize - 1) {
-                    rxBuf_[rxPos_] = byte;
+                if (!rxOverflow_) {
+                    if (rxPos_ < kBufferSize - 1) {
+                        rxBuf_[rxPos_] = byte;
+                    }
+                } else if ((rxHeader_ & 0xF0u) == kPktPublish && ((rxHeader_ >> 1) & 0x03u) == 1u) {
+                    // Capture topic length & QoS 1 Packet Identifier so we can PUBACK before dropping
+                    if (rxPos_ == 0) {
+                        rxOvfTopicLen_ = static_cast<uint16_t>(static_cast<uint16_t>(byte) << 8);
+                    } else if (rxPos_ == 1) {
+                        rxOvfTopicLen_ |= byte;
+                    } else if (rxPos_ == static_cast<size_t>(2u + rxOvfTopicLen_)) {
+                        rxOvfPacketId_ = static_cast<uint16_t>(static_cast<uint16_t>(byte) << 8);
+                    } else if (rxPos_ == static_cast<size_t>(3u + rxOvfTopicLen_)) {
+                        rxOvfPacketId_ |= byte;
+                    }
                 }
                 rxPos_++;
                 if (rxPos_ >= rxRemLen_) {
@@ -352,6 +367,10 @@ void MqttClient::pumpIncoming(uint32_t nowMs) {
                         rxBuf_[rxPos_] = '\0';
                         handlePacket(nowMs);
                     } else {
+                        if ((rxHeader_ & 0xF0u) == kPktPublish && ((rxHeader_ >> 1) & 0x03u) == 1u &&
+                            rxRemLen_ >= static_cast<uint32_t>(4u + rxOvfTopicLen_)) {
+                            sendPubAck(rxOvfPacketId_);
+                        }
                         Log.warn("MQTT: dropped oversized incoming packet (%lu bytes)",
                                  static_cast<unsigned long>(rxRemLen_));
                     }
@@ -429,13 +448,13 @@ void MqttClient::handlePublishPacket(uint8_t header, const uint8_t* body, size_t
         offset += 2;
     }
 
-    char topic[128];
+    static char topic[128];
     size_t copyLen = (topicLen < sizeof(topic) - 1) ? topicLen : (sizeof(topic) - 1);
     std::memcpy(topic, body + 2, copyLen);
     topic[copyLen] = '\0';
 
     size_t payloadLen = bodyLen - offset;
-    char payload[512];
+    static char payload[512];
     size_t pCopy = (payloadLen < sizeof(payload) - 1) ? payloadLen : (sizeof(payload) - 1);
     if (pCopy > 0) {
         std::memcpy(payload, body + offset, pCopy);

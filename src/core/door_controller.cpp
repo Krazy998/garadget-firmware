@@ -43,10 +43,19 @@ uint8_t DoorController::computeAmbientBrightness(uint16_t rawBase) {
 void DoorController::init(uint32_t nowMs) {
     relayActive_ = false;
     clicksRemaining_ = 0;
+    openPendingTimer_.stop();
     hw_.setRelay(false);
     lastEventMs_ = nowMs;
     evaluateSensor(nowMs, true);
     scanTimer_.start(nowMs, cfg_.readTimeMs);
+}
+
+void DoorController::forceRelayOff() {
+    hw_.setRelay(false);
+    relayActive_ = false;
+    clicksRemaining_ = 0;
+    relayOnTimer_.stop();
+    relayPauseTimer_.stop();
 }
 
 SensorReading DoorController::forceScan(uint32_t nowMs) {
@@ -65,12 +74,18 @@ void DoorController::tick(uint32_t nowMs) {
         }
         if (clicksRemaining_ > 0) {
             relayPauseTimer_.start(nowMs, cfg_.relayPauseMs);
+        } else if (openPendingTimer_.isRunning() && cfg_.readTimeMs > 500u) {
+            // Accelerate sensor scan after Open from Closed so motion is detected promptly
+            scanTimer_.start(nowMs, 500u);
         }
     } else if (!relayActive_ && clicksRemaining_ > 0 && relayPauseTimer_.expired(nowMs)) {
         hw_.setRelay(true);
         relayActive_ = true;
         relayOnTimer_.start(nowMs, cfg_.relayTimeMs);
     }
+
+    // Expire post-open deduplication window once elapsed
+    openPendingTimer_.expired(nowMs);
 
     // 2. Periodic sensor scan
     if (!scanTimer_.isRunning() || scanTimer_.expired(nowMs)) {
@@ -124,6 +139,7 @@ void DoorController::transitionTo(DoorStatus next, uint32_t nowMs) {
     if (prev == next) return;
     status_ = next;
     lastEventMs_ = nowMs;
+    openPendingTimer_.stop();
 
     switch (next) {
         case DoorStatus::Opening:
@@ -177,10 +193,19 @@ bool DoorController::executeCommand(DoorCommand cmd, uint32_t nowMs) {
                     clicks = 1;
                     nextStatus = DoorStatus::Opening;
                     break;
-                case DoorStatus::Closed:
+                case DoorStatus::Closed: {
+                    // Ignore duplicate Open commands during the post-click detection window so a double-tap cannot stop the door
+                    if (openPendingTimer_.isRunning()) {
+                        return true;
+                    }
+                    uint32_t cooldownMs = static_cast<uint32_t>(cfg_.readTimeMs) * 3u;
+                    if (cooldownMs < 3000u) cooldownMs = 3000u;
+                    if (cooldownMs > cfg_.motionTimeMs) cooldownMs = cfg_.motionTimeMs;
+                    openPendingTimer_.start(nowMs, cooldownMs);
                     // Trigger opener; wait for sensor to confirm door actually moves off reflector
                     clicks = 1;
                     break;
+                }
                 case DoorStatus::Stopped:
                     // Single-button opener typically closes on 1st click after stop, reverses to open on 2nd
                     clicks = 2;

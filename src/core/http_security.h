@@ -146,33 +146,48 @@ inline bool verifyCsrfProtection(const char* headers, size_t headerLen,
     return startsWithCi(ct, ctLen, "application/json");
 }
 
-// Per-IP brute-force rate limiter for Web UI authentication (locks out an IP for 10s after 5 consecutive failures).
+// Per-IP brute-force rate limiter with exponential backoff (15s -> 30s -> 60s -> 120s -> 300s)
+// across 8 tracked IP slots plus a global fallback lockout when all slots are actively locked.
 class AuthRateLimiter {
 public:
-    static constexpr uint8_t  kMaxFailures = 5;
-    static constexpr uint32_t kLockoutMs   = 10000u;
-    static constexpr size_t   kMaxSlots    = 4;
+    static constexpr uint8_t  kMaxFailures   = 5;
+    static constexpr uint32_t kBaseLockoutMs = 15000u;
+    static constexpr uint32_t kMaxLockoutMs  = 300000u; // 5 minutes max backoff
+    static constexpr size_t   kMaxSlots      = 8;
 
     bool isLockedOut(uint32_t nowMs, uint32_t clientIp = 0) {
+        expireStale(nowMs);
         Slot* s = findSlot(clientIp);
-        if (!s || !s->locked) return false;
-        if (static_cast<uint32_t>(nowMs - s->lockStartMs) >= kLockoutMs) {
-            s->locked = false;
-            s->failures = 0;
-            return false;
+        if (s) {
+            return s->locked;
         }
-        return true;
+        // Global fallback: if every slot is actively locked out, reject unknown IPs too (blocks multi-IP sprays)
+        size_t activeLocks = 0;
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].locked) {
+                activeLocks++;
+            }
+        }
+        return activeLocks == kMaxSlots;
     }
 
     void recordFailure(uint32_t nowMs, uint32_t clientIp = 0) {
+        expireStale(nowMs);
         Slot* s = findOrAllocSlot(clientIp, nowMs);
         s->lastSeenMs = nowMs;
         if (s->failures < kMaxFailures) {
             s->failures++;
         }
         if (s->failures >= kMaxFailures) {
+            uint8_t shift = (s->lockoutLevel > 4) ? 4 : s->lockoutLevel;
+            uint32_t dur = kBaseLockoutMs << shift;
+            if (dur > kMaxLockoutMs) dur = kMaxLockoutMs;
             s->locked = true;
             s->lockStartMs = nowMs;
+            s->lockDurationMs = dur;
+            if (s->lockoutLevel < 5) {
+                s->lockoutLevel++;
+            }
         }
     }
 
@@ -181,6 +196,8 @@ public:
         if (s) {
             s->failures = 0;
             s->locked = false;
+            s->lockoutLevel = 0;
+            s->lockDurationMs = 0;
         }
     }
 
@@ -193,15 +210,36 @@ public:
         return 0;
     }
 
+    uint32_t currentLockoutMs(uint32_t clientIp = 0) const {
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].ip == clientIp && slots_[i].locked) {
+                return slots_[i].lockDurationMs;
+            }
+        }
+        return 0;
+    }
+
 private:
     struct Slot {
         uint32_t ip = 0;
         uint32_t lockStartMs = 0;
+        uint32_t lockDurationMs = 0;
         uint32_t lastSeenMs = 0;
         uint8_t failures = 0;
+        uint8_t lockoutLevel = 0;
         bool locked = false;
         bool used = false;
     };
+
+    void expireStale(uint32_t nowMs) {
+        for (size_t i = 0; i < kMaxSlots; ++i) {
+            if (slots_[i].used && slots_[i].locked &&
+                static_cast<uint32_t>(nowMs - slots_[i].lockStartMs) >= slots_[i].lockDurationMs) {
+                slots_[i].locked = false;
+                slots_[i].failures = 0;
+            }
+        }
+    }
 
     Slot* findSlot(uint32_t ip) {
         for (size_t i = 0; i < kMaxSlots; ++i) {
@@ -216,18 +254,10 @@ private:
         if (Slot* existing = findSlot(ip)) {
             return existing;
         }
-        // Expire any stale lockouts first
+        // Prefer an unused slot or an unlocked zero-failure slot with no backoff history
         for (size_t i = 0; i < kMaxSlots; ++i) {
-            if (slots_[i].used && slots_[i].locked &&
-                static_cast<uint32_t>(nowMs - slots_[i].lockStartMs) >= kLockoutMs) {
-                slots_[i].locked = false;
-                slots_[i].failures = 0;
-            }
-        }
-        // Prefer an unused slot or an unlocked zero-failure slot
-        for (size_t i = 0; i < kMaxSlots; ++i) {
-            if (!slots_[i].used || (!slots_[i].locked && slots_[i].failures == 0)) {
-                slots_[i] = Slot{ip, 0, nowMs, 0, false, true};
+            if (!slots_[i].used || (!slots_[i].locked && slots_[i].failures == 0 && slots_[i].lockoutLevel == 0)) {
+                slots_[i] = Slot{ip, 0, 0, nowMs, 0, 0, false, true};
                 return &slots_[i];
             }
         }
@@ -248,7 +278,7 @@ private:
                 victim = i;
             }
         }
-        slots_[victim] = Slot{ip, 0, nowMs, 0, false, true};
+        slots_[victim] = Slot{ip, 0, 0, nowMs, 0, 0, false, true};
         return &slots_[victim];
     }
 

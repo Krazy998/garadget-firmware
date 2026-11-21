@@ -5,6 +5,14 @@
 
 namespace garadget {
 
+namespace {
+// Hardware-safety RTOS one-shot timer: guarantees the opener relay releases even if loop() stalls.
+void onRelaySafetyTimeout() {
+    digitalWrite(kPinRelay, LOW);
+}
+::Timer gRelaySafetyTimer(350, onRelaySafetyTimeout, true /* one_shot */);
+} // namespace
+
 bool EepromStorage::read(void* dst, size_t len) {
     if (!dst || len == 0 || len > EEPROM.length()) return false;
     uint8_t* out = static_cast<uint8_t*>(dst);
@@ -48,8 +56,21 @@ void P1DoorHardware::configureSensorMode(SensorMode mode) {
     }
 }
 
+void P1DoorHardware::setMaxRelayPulseMs(uint32_t ms) {
+    if (ms < kMinRelayOnMs + 50u) ms = kMinRelayOnMs + 50u;
+    if (ms > kMaxRelayOnMs + 50u) ms = kMaxRelayOnMs + 50u;
+    maxRelayPulseMs_ = ms;
+}
+
 void P1DoorHardware::setRelay(bool active) {
-    digitalWrite(kPinRelay, active ? HIGH : LOW);
+    if (active) {
+        // Arm independent RTOS safety cutoff before energizing relay
+        gRelaySafetyTimer.changePeriod(maxRelayPulseMs_);
+        digitalWrite(kPinRelay, HIGH);
+    } else {
+        digitalWrite(kPinRelay, LOW);
+        gRelaySafetyTimer.stop();
+    }
 }
 
 SensorReading P1DoorHardware::readSensor(SensorMode mode, uint8_t samples) {

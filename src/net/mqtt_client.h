@@ -94,6 +94,8 @@ private:
     uint32_t rxMult_ = 1;
     size_t rxPos_ = 0;
     bool rxOverflow_ = false;
+    uint16_t rxOvfTopicLen_ = 0;
+    uint16_t rxOvfPacketId_ = 0;
 
     uint8_t txBuf_[kBufferSize]{};
     uint8_t rxBuf_[kBufferSize]{};

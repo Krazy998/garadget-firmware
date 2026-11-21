@@ -53,6 +53,7 @@ public:
     const SensorReading& lastReading() const { return lastReading_; }
     bool relayActive() const { return relayActive_; }
     bool isClickSequenceBusy() const { return relayActive_ || clicksRemaining_ > 0 || relayPauseTimer_.isRunning(); }
+    void forceRelayOff();
 
     // Safe reflection percentage calculation (exposed for direct unit testing).
     static uint8_t computeLaserReflection(const int32_t* baseSamples, const int32_t* litSamples,
@@ -75,6 +76,7 @@ private:
     Timer motionTimer_;
     Timer relayOnTimer_;
     Timer relayPauseTimer_;
+    Timer openPendingTimer_;
 
     bool relayActive_ = false;
     uint8_t clicksRemaining_ = 0;

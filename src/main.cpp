@@ -1,5 +1,5 @@
 /**
- * Garadget Local Firmware v3.2.2
+ * Garadget Local Firmware v3.3.0
  * Target: Particle P1 (STM32F205 + BCM43362) running Particle Device OS 3.3.1
  *
  * Completely local, cloud-free rewrite:
@@ -132,6 +132,7 @@ void onAlertFired(const char* type, const char* data, const char* jsonPayload, v
 void onConfigSaved(void*) {
     uint32_t now = millis();
     gHardware.configureSensorMode(static_cast<garadget::SensorMode>(gConfig.data().sensorMode));
+    gHardware.setMaxRelayPulseMs(static_cast<uint32_t>(gConfig.data().relayTimeMs) + 50u);
     gSntp.applyTimezoneNow();
     applyLedSettings();
     uint32_t newMqttHash = hashMqttCfg(gConfig.data());
@@ -141,7 +142,7 @@ void onConfigSaved(void*) {
     } else {
         gMqtt.publishConfig();
     }
-    if (ipCfgChanged(gConfig.data())) {
+    if (!gWifi.isListening() && ipCfgChanged(gConfig.data())) {
         snapshotIpCfg(gConfig.data());
         gWifi.applyIpConfig(gConfig.data());
         // Cleanly reboot after HTTP response flushes so new Static IP / DHCP lease takes effect
@@ -210,6 +211,7 @@ void setup() {
     }
 
     gHardware.init(static_cast<garadget::SensorMode>(gConfig.data().sensorMode));
+    gHardware.setMaxRelayPulseMs(static_cast<uint32_t>(gConfig.data().relayTimeMs) + 50u);
 
     gDoor.setStatusCallback(onDoorStatusChanged, nullptr);
     gDoor.init(now);
@@ -217,7 +219,7 @@ void setup() {
     gAlerts.setCallback(onAlertFired, nullptr);
     gAlerts.onInit(gDoor.status(), now);
 
-    garadget::initSoftApPortal(&gConfig, &gStorage, &gWifi);
+    garadget::initSoftApPortal(&gConfig, &gStorage, &gWifi, onConfigSaved, nullptr);
     snapshotIpCfg(gConfig.data());
     gLastMqttHash = hashMqttCfg(gConfig.data());
     gWifi.init(now, gConfig.data());
@@ -253,8 +255,9 @@ void loop() {
     uint16_t localMin = timeValid ? static_cast<uint16_t>(Time.hour() * 60 + Time.minute()) : 0;
     gAlerts.tick(gDoor.status(), now, timeValid, localMin);
 
-    // 3. Local network services (never Particle Cloud)
-    gWifi.tick(now);
+    // 3. Local network services (never Particle Cloud; defer blocking ticks while a relay sequence is active)
+    garadget::tickSoftApPortal(now);
+    gWifi.tick(now, gConfig.hasAdminPassword());
     bool listeningNow = gWifi.isListening();
     if (listeningNow != gLastWifiListening) {
         gLastWifiListening = listeningNow;
@@ -266,9 +269,15 @@ void loop() {
         }
         applyLedSettings();
     }
-    gSntp.tick(now, gWifi.isReady());
-    gMqtt.tick(now);
-    gWeb.tick(now);
+    if (!gDoor.isClickSequenceBusy()) {
+        gSntp.tick(now, gWifi.isReady());
+    }
+    if (!gDoor.isClickSequenceBusy()) {
+        gMqtt.tick(now);
+    }
+    if (!gDoor.isClickSequenceBusy()) {
+        gWeb.tick(now);
+    }
 
     // 4. USB Serial CLI
     gCli.tick(now);

@@ -9,6 +9,7 @@
 #include "core/alert_engine.h"
 #include "core/config.h"
 #include "core/door_controller.h"
+#include "core/http_request.h"
 #include "core/http_security.h"
 #include "core/json_utils.h"
 #include "core/ota_validator.h"
@@ -277,14 +278,19 @@ void testDoorControllerStateMachine() {
     assert(!hw.relayState);
     assert(hw.relayOnCount == 1 && hw.relayOffCount == 1);
 
-    // Door starts moving off reflector -> sensor reads 5% -> Opening
+    // Second Open 500ms after first (before sensor scan sees motion) MUST NOT click relay again!
+    assert(door.executeCommand(DoorCommand::Open, 600));
+    assert(!hw.relayState);
+    assert(hw.relayOnCount == 1);
+
+    // Door starts moving off reflector -> accelerated scan at 400+500=900ms sees 5% -> Opening
     hw.nextReading = {5, 2500, 38};
-    door.tick(1100);
+    door.tick(900);
     assert(door.status() == DoorStatus::Opening);
     assert(transitions.size() == 1 && transitions.back() == DoorStatus::Opening);
 
     // After motionTimeMs (10000ms), Opening -> Open
-    door.tick(11100);
+    door.tick(10900);
     assert(door.status() == DoorStatus::Open);
     assert(transitions.back() == DoorStatus::Open);
 
@@ -311,6 +317,21 @@ void testDoorControllerStateMachine() {
     door.tick(24600); // End click 2
     assert(!hw.relayState);
     assert(hw.relayOnCount == prevOn + 2);
+
+    // If door returns Closed and an Open fails to move the door, retry works after cooldown (3s)
+    hw.nextReading = {80, 1000, 75};
+    door.tick(26000);
+    assert(door.status() == DoorStatus::Closed);
+    int beforeStuck = hw.relayOnCount;
+    assert(door.executeCommand(DoorCommand::Open, 30000));
+    door.tick(30300); // Relay releases
+    assert(door.executeCommand(DoorCommand::Open, 31000)); // Within 3s cooldown -> suppressed
+    assert(hw.relayOnCount == beforeStuck + 1);
+    door.tick(33000); // Cooldown expires -> retry allowed
+    assert(door.executeCommand(DoorCommand::Open, 33100));
+    assert(hw.relayOnCount == beforeStuck + 2);
+    door.forceRelayOff();
+    assert(!hw.relayState && !door.isClickSequenceBusy());
 }
 
 void testAlertEngine() {
@@ -347,11 +368,17 @@ void testAlertEngine() {
     alerts.tick(DoorStatus::Open, 62000, true, 1380);
     assert(fired.size() == 3 && fired[2] == "night:1320-360");
     alerts.tick(DoorStatus::Open, 63000, true, 1380);
-    assert(fired.size() == 3); // Must not repeat
+    assert(fired.size() == 3); // Must not repeat within the same night
+
+    // Daytime next morning (10:00 = 600 min) resets night latch so Night 2 fires again while still open
+    alerts.tick(DoorStatus::Open, 64000, true, 600);
+    assert(fired.size() == 3);
+    alerts.tick(DoorStatus::Open, 65000, true, 1380);
+    assert(fired.size() == 4 && fired[3] == "night:1320-360");
 
     // Closing resets timeout & night alert latches
     alerts.onStatusChange(DoorStatus::Closed, 70000);
-    assert(alerts.historyCount() == 3);
+    assert(alerts.historyCount() == 4);
     assert(std::strcmp(alerts.historyItem(0).type, "night") == 0);
 
     // Changing aot while door is already open reschedules timer dynamically
@@ -520,7 +547,7 @@ void testHttpSecurityAndAcl() {
         "Content-Type: application/octet-stream\r\n\r\n";
     assert(verifyCsrfProtection(validOtaReq, std::strlen(validOtaReq), "POST", "/api/ota"));
 
-    // 4. Per-IP auth rate limiter locks out offending IP after 5 failures without blocking another IP
+    // 4. Per-IP exponential backoff rate limiter (15s -> 30s -> 60s) + global fallback across 8 slots
     AuthRateLimiter lim;
     const uint32_t ipA = 0xC0A8010Au;
     const uint32_t ipB = 0xC0A8010Bu;
@@ -528,39 +555,70 @@ void testHttpSecurityAndAcl() {
         lim.recordFailure(1000, ipA);
         assert(!lim.isLockedOut(1000, ipA));
     }
-    lim.recordFailure(1000, ipA);
+    lim.recordFailure(1000, ipA); // 1st wave -> 15s lockout
     assert(lim.isLockedOut(1000, ipA));
+    assert(lim.currentLockoutMs(ipA) == 15000u);
     assert(!lim.isLockedOut(1000, ipB)); // Other client unaffected!
-    assert(lim.isLockedOut(10999, ipA));
-    assert(!lim.isLockedOut(11000, ipA));
+    assert(lim.isLockedOut(15999, ipA));
+    assert(!lim.isLockedOut(16000, ipA));
 
-    // 5. Mandatory apass length + untrusted channels (MQTT) cannot modify apass or reset defaults; atomic rollback
+    // 2nd wave of 5 failures -> doubles to 30s lockout
+    for (int i = 0; i < 5; ++i) lim.recordFailure(16000, ipA);
+    assert(lim.isLockedOut(16000, ipA));
+    assert(lim.currentLockoutMs(ipA) == 30000u);
+    assert(lim.isLockedOut(45999, ipA));
+    assert(!lim.isLockedOut(46000, ipA));
+
+    // Success resets backoff level back to 15s
+    lim.recordSuccess(ipA);
+    for (int i = 0; i < 5; ++i) lim.recordFailure(50000, ipA);
+    assert(lim.currentLockoutMs(ipA) == 15000u);
+
+    // Fill all 8 slots with active lockouts -> 9th unknown IP hits global fallback throttle
+    AuthRateLimiter sprayLim;
+    for (uint32_t n = 1; n <= AuthRateLimiter::kMaxSlots; ++n) {
+        for (int i = 0; i < 5; ++i) sprayLim.recordFailure(1000, 0x0A000000u + n);
+    }
+    assert(sprayLim.isLockedOut(1000, 0x0A0000FFu));
+
+    // 5. Mandatory 8-char apass + Operational (MQTT) scope blocks network/broker/NTP/apass/defaults
     ConfigManager cfg;
     cfg.resetDefaults();
     assert(!cfg.hasAdminPassword());
-    assert(cfg.setParam("apass", "", true) == -1);     // Empty rejected
-    assert(cfg.setParam("apass", "abc", true) == -1);  // < 4 chars rejected
-    assert(cfg.setParam("apass", "Admin123", true) == 1);
+    assert(cfg.setParam("apass", "", ConfigScope::Full) == -1);        // Empty rejected
+    assert(cfg.setParam("apass", "1234567", ConfigScope::Full) == -1); // < 8 chars rejected
+    assert(cfg.setParam("apass", "Admin123", ConfigScope::Full) == 1); // 8 chars accepted
     assert(cfg.hasAdminPassword());
 
+    // Operational scope (MQTT) allows sensor/alert/LED tuning, blocks privileged network/broker/NTP/apass keys
+    assert(cfg.setParam("srt", "25", ConfigScope::Operational) == 1);
+    assert(cfg.setParam("leds", "1", ConfigScope::Operational) == 1);
+    assert(cfg.setParam("mqhost", "evil.lan", ConfigScope::Operational) == -1);
+    assert(cfg.setParam("ipm", "1", ConfigScope::Operational) == -1);
+    assert(cfg.setParam("ntp", "evil.ntp", ConfigScope::Operational) == -1);
+    assert(cfg.setParam("apass", "OtherPass1", ConfigScope::Operational) == -1);
+    assert(cfg.applyPipeConfig("defaults", ConfigScope::Operational) == -1);
+    cfg.setParam("srt", "15", ConfigScope::Full);
+    cfg.setParam("leds", "0", ConfigScope::Full);
+
     // Atomic JSON rollback: forbidden key or invalid field rejects whole payload with zero partial writes
-    const char* mqttAttempt = "{\"apass\":\"NewPass\",\"srt\":22}";
-    assert(cfg.applyJsonConfig(mqttAttempt, std::strlen(mqttAttempt), false) == -1);
+    const char* mqttAttempt = "{\"apass\":\"NewPass12\",\"srt\":22}";
+    assert(cfg.applyJsonConfig(mqttAttempt, std::strlen(mqttAttempt), ConfigScope::Operational) == -1);
     assert(std::strcmp(cfg.data().adminPass, "Admin123") == 0); // Unchanged!
     assert(cfg.data().sensorThreshold == 15);                   // Rolled back!
 
     const char* partialBadJson = "{\"nme\":\"Changed\",\"srt\":99}";
-    assert(cfg.applyJsonConfig(partialBadJson, std::strlen(partialBadJson), true) == -1);
+    assert(cfg.applyJsonConfig(partialBadJson, std::strlen(partialBadJson), ConfigScope::Full) == -1);
     assert(std::strcmp(cfg.data().deviceName, "Garage") == 0);  // Rolled back!
 
     // Read-only keys from GET /api/config are cleanly ignored on re-import
     const char* withReadOnly = "{\"ssid\":\"Net\",\"ip\":\"1.2.3.4\",\"mac\":\"AA:BB\",\"mqpwSet\":false,\"apassSet\":true,\"srt\":22}";
-    assert(cfg.applyJsonConfig(withReadOnly, std::strlen(withReadOnly), false) == 1);
+    assert(cfg.applyJsonConfig(withReadOnly, std::strlen(withReadOnly), ConfigScope::Operational) == 1);
     assert(cfg.data().sensorThreshold == 22);
 
     // Pipe config must validate & roll back atomically (prevents ipm=1 without sip/sgw corrupting EEPROM)
-    assert(cfg.applyPipeConfig("defaults", false) == -1);
-    assert(cfg.applyPipeConfig("nme=Temp|ipm=1", true) == -1);
+    assert(cfg.applyPipeConfig("defaults", ConfigScope::Operational) == -1);
+    assert(cfg.applyPipeConfig("nme=Temp|ipm=1", ConfigScope::Full) == -1);
     assert(cfg.data().ipMode == 0);
     assert(std::strcmp(cfg.data().deviceName, "Garage") == 0);
 
@@ -576,11 +634,14 @@ void testHttpSecurityAndAcl() {
         maxCfg.setParam("hapfx", "homeassistant_custom_prefix");
         maxCfg.applyJsonConfig("{\"ipm\":1,\"sip\":\"192.168.100.200\",\"smask\":\"255.255.255.0\",\"sgw\":\"192.168.100.254\",\"sdns\":\"192.168.100.253\"}", 107);
         char bigJson[1152];
-        maxCfg.toJson(bigJson, sizeof(bigJson), "1234567890abcdef12345678", "3.3.1",
-                      "MySuperLongHomeWifiNetworkName32", "192.168.100.200", "AA:BB:CC:DD:EE:FF");
+        assert(maxCfg.toJson(bigJson, sizeof(bigJson), "1234567890abcdef12345678", "3.3.1",
+                             "MySuperLongHomeWifiNetworkName32", "192.168.100.200", "AA:BB:CC:DD:EE:FF"));
         size_t jlen = std::strlen(bigJson);
         assert(jlen < sizeof(bigJson) - 1);
         assert(bigJson[jlen - 1] == '}');
+        // Tiny buffer returns false (truncated)
+        char tinyJson[32];
+        assert(!maxCfg.toJson(tinyJson, sizeof(tinyJson), "id", "3.3.1", "ssid", "1.2.3.4", "AA"));
     }
 
     // 6. Static IP & DNS validation + atomic rollback on incomplete static IP config
@@ -643,6 +704,82 @@ void testHttpSecurityAndAcl() {
     assert(migV3.data().ledBrightness == 100);
 }
 
+void testHttpRequestParser() {
+    auto feedAll = [](HttpRequestParser& p, const char* data, size_t len) -> size_t {
+        p.reset();
+        size_t consumed = 0;
+        for (size_t i = 0; i < len; ++i) {
+            consumed++;
+            if (!p.feedByte(static_cast<uint8_t>(data[i]))) break;
+        }
+        return consumed;
+    };
+
+    HttpRequestParser p;
+
+    // 1. GET with query string strips query cleanly
+    const char* getReq = "GET /api/status?t=123 HTTP/1.1\r\nHost: 192.168.1.50\r\n\r\n";
+    feedAll(p, getReq, std::strlen(getReq));
+    assert(p.finish() == HttpRequestParser::Status::Ready);
+    assert(std::strcmp(p.method(), "GET") == 0);
+    assert(std::strcmp(p.path(), "/api/status") == 0);
+    assert(p.bodyLen() == 0);
+
+    // 2. POST JSON with exact Content-Length
+    const char* postReq =
+        "POST /api/command HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: 18\r\n\r\n"
+        "{\"command\":\"open\"}";
+    feedAll(p, postReq, std::strlen(postReq));
+    assert(p.finish() == HttpRequestParser::Status::Ready);
+    assert(std::strcmp(p.method(), "POST") == 0);
+    assert(std::strcmp(p.path(), "/api/command") == 0);
+    assert(p.bodyLen() == 18);
+    assert(std::strcmp(p.body(), "{\"command\":\"open\"}") == 0);
+
+    // 3. POST /api/ota stops immediately at \r\n\r\n without consuming binary payload bytes
+    const char* otaReq =
+        "POST /api/ota HTTP/1.1\r\n"
+        "Host: 192.168.1.50\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Content-Length: 100000\r\n\r\n"
+        "BINARY_BYTES";
+    size_t consumed = feedAll(p, otaReq, std::strlen(otaReq));
+    assert(p.finish() == HttpRequestParser::Status::Ready);
+    assert(p.isOtaStream());
+    assert(p.contentLength() == 100000u);
+    assert(consumed == p.headerLen());
+    assert(p.bodyLen() == 0);
+
+    // 4. Truncated JSON body triggers 408 BodyTimeout
+    const char* partialPost =
+        "POST /api/config HTTP/1.1\r\n"
+        "Content-Length: 50\r\n\r\n"
+        "{\"srt\":20";
+    feedAll(p, partialPost, std::strlen(partialPost));
+    assert(p.finish() == HttpRequestParser::Status::BodyTimeout);
+
+    // 5. Non-OTA body > 1280B triggers 413 PayloadTooLarge
+    const char* bigPost =
+        "POST /api/config HTTP/1.1\r\n"
+        "Content-Length: 2000\r\n\r\n";
+    feedAll(p, bigPost, std::strlen(bigPost));
+    assert(p.finish() == HttpRequestParser::Status::PayloadTooLarge);
+
+    // 6. Oversized headers without \r\n\r\n trigger 431 HeadersTooLarge
+    std::string hugeHdr = "GET /api/status HTTP/1.1\r\nX-Pad: ";
+    hugeHdr.append(HttpRequestParser::kBufSize, 'A');
+    feedAll(p, hugeHdr.data(), hugeHdr.size());
+    assert(p.finish() == HttpRequestParser::Status::HeadersTooLarge);
+
+    // 7. Invalid / negative Content-Length triggers 400 BadRequest
+    const char* badCl = "POST /api/command HTTP/1.1\r\nContent-Length: -5\r\n\r\n";
+    feedAll(p, badCl, std::strlen(badCl));
+    assert(p.finish() == HttpRequestParser::Status::BadRequest);
+}
+
 } // namespace
 
 int main() {
@@ -657,6 +794,7 @@ int main() {
     RUN_TEST(testMqttAndHaDiscovery);
     RUN_TEST(testOtaValidator);
     RUN_TEST(testHttpSecurityAndAcl);
+    RUN_TEST(testHttpRequestParser);
     std::printf("All %d test suites passed!\n", gTestsRun);
     return 0;
 }

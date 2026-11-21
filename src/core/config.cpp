@@ -200,8 +200,9 @@ bool ConfigManager::isValidHostOrEmpty(const char* host) {
     return true;
 }
 
-int ConfigManager::setParam(const char* key, const char* value, bool allowAdminPass) {
+int ConfigManager::setParam(const char* key, const char* value, ConfigScope scope) {
     if (!key || !value) return -1;
+    const bool allowFull = (scope == ConfigScope::Full);
 
     if (std::strcmp(key, "ver") == 0 || std::strcmp(key, "sys") == 0 ||
         std::strcmp(key, "id") == 0 || std::strcmp(key, "ssid") == 0 ||
@@ -311,6 +312,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "ntp") == 0) {
+        if (!allowFull) return -1;
         char clean[kNtpServerCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (!isValidHostOrEmpty(clean)) return -1;
@@ -321,6 +323,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqtt") == 0) {
+        if (!allowFull) return -1;
         if (!parseIntStrict(value, num) || num < 0 || num > 3) return -1;
         // Accept modern 0/1 AND legacy Garadget bitmask (2=MQTT only, 3=MQTT+Cloud)
         uint8_t enabled = (num == 1 || (num & 0x02)) ? 1 : 0;
@@ -330,6 +333,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "ha") == 0) {
+        if (!allowFull) return -1;
         if (!parseIntStrict(value, num) || num < 0 || num > 1) return -1;
         uint8_t enabled = static_cast<uint8_t>(num);
         if (cfg_.haDiscovery == enabled) return 0;
@@ -338,6 +342,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "hapfx") == 0) {
+        if (!allowFull) return -1;
         char clean[kHaPrefixCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (clean[0] == '\0') return -1;
@@ -351,6 +356,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqip") == 0 || std::strcmp(key, "mqhost") == 0) {
+        if (!allowFull) return -1;
         char clean[kMqttHostCap];
         sanitizeAscii(clean, sizeof(clean), value);
         // Normalize legacy "0.0.0.0" to empty
@@ -365,6 +371,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqpt") == 0) {
+        if (!allowFull) return -1;
         if (!parseIntStrict(value, num) || num < 1 || num > 65535) return -1;
         if (cfg_.mqttPort == static_cast<uint16_t>(num)) return 0;
         cfg_.mqttPort = static_cast<uint16_t>(num);
@@ -372,6 +379,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqus") == 0) {
+        if (!allowFull) return -1;
         char clean[kMqttUserCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (std::strcmp(clean, cfg_.mqttUser) == 0) return 0;
@@ -381,6 +389,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqpw") == 0) {
+        if (!allowFull) return -1;
         char clean[kMqttPassCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (std::strcmp(clean, cfg_.mqttPass) == 0) return 0;
@@ -390,6 +399,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "mqto") == 0) {
+        if (!allowFull) return -1;
         if (!parseIntStrict(value, num) || num < 1) return -1;
         // Gracefully convert legacy millisecond values (e.g. 5000 -> 5s)
         if (num >= 1000) {
@@ -403,7 +413,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     }
 
     if (std::strcmp(key, "apass") == 0) {
-        if (!allowAdminPass) return -1;
+        if (!allowFull) return -1;
         char clean[kAdminPassCap];
         sanitizeAscii(clean, sizeof(clean), value);
         if (std::strlen(clean) < kMinAdminPassLen) return -1;
@@ -440,6 +450,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     };
 
     if (std::strcmp(key, "ipm") == 0) {
+        if (!allowFull) return -1;
         if (!parseIntStrict(value, num) || (num != 0 && num != 1)) return -1;
         if (cfg_.ipMode == static_cast<uint8_t>(num)) return 0;
         cfg_.ipMode = static_cast<uint8_t>(num);
@@ -448,6 +459,7 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
 
     if (std::strcmp(key, "sip") == 0 || std::strcmp(key, "smask") == 0 ||
         std::strcmp(key, "sgw") == 0 || std::strcmp(key, "sdns") == 0) {
+        if (!allowFull) return -1;
         uint8_t parsed[4];
         if (!parseIpv4Field(value, parsed, true)) return -1;
         uint8_t* dst = (std::strcmp(key, "sip") == 0) ? cfg_.staticIp
@@ -485,10 +497,10 @@ int ConfigManager::setParam(const char* key, const char* value, bool allowAdminP
     return -1;
 }
 
-int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
+int ConfigManager::applyPipeConfig(const char* pipeStr, ConfigScope scope) {
     if (!pipeStr || pipeStr[0] == '\0') return -1;
     if (std::strcmp(pipeStr, "defaults") == 0) {
-        if (!allowAdminPass) return -1;
+        if (scope != ConfigScope::Full) return -1;
         resetDefaults();
         return 1;
     }
@@ -527,7 +539,7 @@ int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
         std::memcpy(val, valStart, vlen);
         val[vlen] = '\0';
 
-        int res = setParam(key, val, allowAdminPass);
+        int res = setParam(key, val, scope);
         if (res < 0) {
             cfg_ = backup;
             tz_ = tzBackup;
@@ -546,19 +558,19 @@ int ConfigManager::applyPipeConfig(const char* pipeStr, bool allowAdminPass) {
     return updates;
 }
 
-int ConfigManager::applyJsonConfig(const char* json, size_t len, bool allowAdminPass) {
+int ConfigManager::applyJsonConfig(const char* json, size_t len, ConfigScope scope) {
     DeviceConfig backup = cfg_;
     Timezone tzBackup = tz_;
     struct ApplyCtx {
         ConfigManager* self;
-        bool allowAdminPass;
+        ConfigScope scope;
         int updates;
         bool hadError;
-    } ctx{this, allowAdminPass, 0, false};
+    } ctx{this, scope, 0, false};
 
     auto cb = [](const char* key, const char* value, bool /*isString*/, void* user) -> bool {
         auto* c = static_cast<ApplyCtx*>(user);
-        int res = c->self->setParam(key, value, c->allowAdminPass);
+        int res = c->self->setParam(key, value, c->scope);
         if (res < 0) {
             c->hadError = true;
             return false; // Fail fast and roll back atomically
@@ -575,7 +587,7 @@ int ConfigManager::applyJsonConfig(const char* json, size_t len, bool allowAdmin
     return ctx.updates;
 }
 
-void ConfigManager::toJson(char* out, size_t outCap,
+bool ConfigManager::toJson(char* out, size_t outCap,
                            const char* deviceId,
                            const char* systemVersion,
                            const char* wifiSsid,
@@ -633,6 +645,7 @@ void ConfigManager::toJson(char* out, size_t outCap,
     w.keyUInt("leds", cfg_.ledStealth);
     w.keyUInt("ledb", cfg_.ledBrightness);
     w.endObject();
+    return !w.truncated();
 }
 
 void ConfigManager::buildTopicId(char* out, size_t outCap, const char* fallbackId) const {
